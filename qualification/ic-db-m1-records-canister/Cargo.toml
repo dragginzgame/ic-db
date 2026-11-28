@@ -31,7 +31,6 @@ ic-db = { workspace = true, features = ["test-support"] }
 ic-db-qualification-transport.workspace = true
 ic-platform-runtime = { workspace = true, features = ["entrypoint-macros", "system-raw"] }
 ic-storage.workspace = true
-ic-wire.workspace = true
 records-schema.workspace = true
 
 [dev-dependencies]

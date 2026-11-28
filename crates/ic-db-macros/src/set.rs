@@ -11,7 +11,6 @@ use quote::quote;
 pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let item = declaration(item, "set")?;
     let WrapperOptions {
-        wire,
         name,
         kind,
         extra: max,
@@ -24,14 +23,12 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let read = field.read_result();
     let ident = item.ident;
     let visibility = item.vis;
-    let attrs = crate::schema_attrs(&item.attrs, false)?;
-    let projection = crate::wire_as(wire, &item.attrs, &ident, &quote!(::std::vec::Vec<#ty>))?;
+    let attrs = crate::schema_attrs(&item.attrs)?;
 
     Ok(quote! {
         #attrs
         #[derive(Clone, Debug, Default, PartialEq, Eq)]
         #visibility struct #ident(#[doc="Authored bounded set."] pub ::std::collections::BTreeSet<#ty>);
-        #projection
         impl ::ic_db::Value for #ident {
             const NAME: &'static str = #name;
             fn definition() -> &'static ::ic_db::TypeSchema {

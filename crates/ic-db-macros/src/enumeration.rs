@@ -9,8 +9,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let fail = |message| syn::Error::new_spanned(&item.ident, message);
     let mut name = None;
     let mut variants = Vec::new();
-    let (wire, options) = crate::declaration_options(args)?;
-    for meta in options {
+    for meta in crate::metas(args)? {
         if meta.path().is_ident("name") {
             once(&mut name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("variant") {
@@ -99,7 +98,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
         quote!()
     };
     let visibility = item.vis;
-    let attrs = crate::schema_attrs(&item.attrs, wire)?;
+    let attrs = crate::schema_attrs(&item.attrs)?;
 
     Ok(quote! {
         #attrs #copy #[derive(Clone,Debug,PartialEq,Eq)]

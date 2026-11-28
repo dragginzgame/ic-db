@@ -13,7 +13,6 @@ use quote::quote;
 /// Common wrapper metadata and the option specific to its declaration grammar.
 ///
 pub(super) struct WrapperOptions<T> {
-    pub(super) wire: bool,
     pub(super) name: String,
     pub(super) kind: Kind,
     pub(super) extra: Option<T>,
@@ -29,8 +28,7 @@ pub(super) fn options<T>(
     let mut name = None;
     let mut kind = None;
     let mut extra = None;
-    let (wire, options) = crate::declaration_options(args)?;
-    for meta in options {
+    for meta in crate::metas(args)? {
         if meta.path().is_ident("name") {
             once(&mut name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("item") {
@@ -48,19 +46,13 @@ pub(super) fn options<T>(
     let kind =
         kind.ok_or_else(|| syn::Error::new_spanned(ident, format!("{label} requires item(...)")))?;
 
-    Ok(WrapperOptions {
-        wire,
-        name,
-        kind,
-        extra,
-    })
+    Ok(WrapperOptions { name, kind, extra })
 }
 
 pub(super) fn list(args: TokenStream, item: TokenStream) -> syn::Result<TokenStream> {
     let item = declaration(item, "list")?;
     let ident = item.ident;
     let WrapperOptions {
-        wire,
         name,
         kind,
         extra: bound,
@@ -68,7 +60,7 @@ pub(super) fn list(args: TokenStream, item: TokenStream) -> syn::Result<TokenStr
     let bound = bound.ok_or_else(|| syn::Error::new_spanned(&ident, "list requires max_items"))?;
     let mut field = Field::nested("value", kind, false, Some(bound));
     field.resolve_self(&ident);
-    let attrs = crate::schema_attrs(&item.attrs, wire)?;
+    let attrs = crate::schema_attrs(&item.attrs)?;
     let vis = item.vis;
     let ty = field.rust_type();
     let desc = field.type_description();
@@ -92,7 +84,6 @@ pub(super) fn newtype(args: TokenStream, item: TokenStream) -> syn::Result<Token
     let mut item = declaration(item, "newtype")?;
     let ident = item.ident;
     let WrapperOptions {
-        wire,
         name,
         kind,
         extra: validation,
@@ -199,9 +190,8 @@ pub(super) fn newtype(args: TokenStream, item: TokenStream) -> syn::Result<Token
         )
     };
     let vis = item.vis;
-    let projection = crate::wire_as(wire, &item.attrs, &ident, &ty)?;
     default_transparent(&mut item.attrs)?;
-    let attrs = crate::schema_attrs(&item.attrs, false)?;
+    let attrs = crate::schema_attrs(&item.attrs)?;
     let inner = match field.kind {
         Kind::Text(_) => quote!(value.0.as_str()),
         Kind::Blob(_) => quote!(value.0.as_slice()),
@@ -223,7 +213,6 @@ pub(super) fn newtype(args: TokenStream, item: TokenStream) -> syn::Result<Token
         #[derive(PartialOrd, Ord)]
         #[derive(Clone, Debug, PartialEq, Eq)]
         #vis struct #ident(#[doc="Wrapped value."] #inner_vis #ty);
-        #projection
         #constructor
         #codec
 

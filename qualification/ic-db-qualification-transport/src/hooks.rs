@@ -1,11 +1,11 @@
 //! Platform dispatch and Wire frame handling for private Wasm fixtures.
 
 use super::REQUEST_LIMITS;
+use crate::fixture_wire::Error;
 use ic_platform_runtime::{
     entrypoints::{AdmissionError, EndpointError, UpdateError},
     raw, system,
 };
-use ic_wire::Error;
 
 // Native processes have no IC instruction meter. Only installed dispatch can
 // supply this capability; a measured request cannot report a native substitute.
@@ -64,7 +64,8 @@ fn admit_frame(id: u64) {
         trap_error(Error::Malformed);
     }
     raw::msg_arg_data_copy(&mut header, 0);
-    ic_wire::validate_request_header(id, &header).unwrap_or_else(|error| trap_error(error));
+    crate::fixture_wire::validate_request_header(id, &header)
+        .unwrap_or_else(|error| trap_error(error));
 }
 
 /// Refuse an endpoint failure through the enclosing message rollback boundary.

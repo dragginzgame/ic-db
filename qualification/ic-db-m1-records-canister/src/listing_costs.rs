@@ -6,6 +6,7 @@ use crate::{
     runtime,
     schema::Document,
 };
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 
 // measured_listing
 // Measure hinted, automatic and complete-sort document listings.
@@ -378,7 +379,7 @@ fn seed_primary_pages(shape: u8) {
     }
 }
 
-type PrimaryPageSample = (Vec<(u64, ic_wire::ByteBuf)>, Option<u64>, u64, u64);
+type PrimaryPageSample = (Vec<(u64, ByteBuf)>, Option<u64>, u64, u64);
 #[ic_platform_runtime::update(
     runtime = ic_platform_runtime, name = "measured_primary_page",
     guard = crate::transport::admit::<251>, decode = crate::transport::decode_measured::<_, 251>,

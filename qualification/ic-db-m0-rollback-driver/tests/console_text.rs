@@ -1,6 +1,7 @@
 //! Console group selection uses the same typed semantics in both execution modes.
 
 use ic_db_m0_rollback_driver::instance;
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 use ic_db_qualification_transport::{PayloadFilters, RowFilters};
 mod wire_frame;
 
@@ -432,10 +433,7 @@ async fn blob_console_preserves_empty_absent_and_refusal_boundaries() {
             _ => "0xff",
         };
         let request = (
-            (
-                ic_wire::ByteBuf::from(payload.clone()),
-                optional.map(ic_wire::ByteBuf::from),
-            ),
+            (ByteBuf::from(payload.clone()), optional.map(ByteBuf::from)),
             false,
         );
         let reply = pic

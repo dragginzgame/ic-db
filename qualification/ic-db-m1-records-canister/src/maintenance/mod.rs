@@ -1,5 +1,6 @@
 //! Private maintenance controls; production authorization/endpoints belong to Canic.
 
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 #[cfg(feature = "aggregate-jobs")]
 mod jobs;
 mod listing;
@@ -16,7 +17,7 @@ use ic_db::{Batch, EntitySchema, Error, SchemaTransition};
 use ic_storage::{StableKey, adapter::StableCell};
 
 #[cfg(feature = "maintenance-faults")]
-pub(super) type RawPage = (Vec<(Vec<u8>, ic_wire::ByteBuf)>, Option<Vec<u8>>);
+pub(super) type RawPage = (Vec<(Vec<u8>, ByteBuf)>, Option<Vec<u8>>);
 
 #[cfg(feature = "maintenance-faults")]
 pub(super) fn raw_page(key: &str, after: Option<Vec<u8>>, limit: usize) -> RawPage {

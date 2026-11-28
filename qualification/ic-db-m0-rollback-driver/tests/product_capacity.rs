@@ -1,5 +1,6 @@
 //! Real migration growth refusal with unchanged backing and independent bytes.
 
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 mod envelope_support;
 mod wire_call;
 
@@ -8,7 +9,7 @@ use std::collections::BTreeMap;
 use wire_call::wire_frame;
 
 type Reply = (Result<(u64, bool), u8>, u64, u64, u64);
-type RawPage = (Vec<(Vec<u8>, ic_wire::ByteBuf)>, Option<Vec<u8>>);
+type RawPage = (Vec<(Vec<u8>, ByteBuf)>, Option<Vec<u8>>);
 
 #[tokio::test]
 async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_cleanup() {

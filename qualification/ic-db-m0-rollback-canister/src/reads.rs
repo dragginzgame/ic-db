@@ -3,7 +3,7 @@
 
 use super::{NAMES, open, runtime};
 use crate::transport::fixture_wire;
-use ic_wire::{Direction, Encoding, Limits};
+use ic_db_qualification_transport::fixture_wire::{Direction, Encoding, Limits};
 use std::ops::Bound::{Excluded, Unbounded};
 
 // seed_reads

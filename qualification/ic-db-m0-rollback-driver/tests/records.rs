@@ -643,7 +643,7 @@ async fn wide_numbers_are_exact_in_wasm_and_rollback_with_the_message() {
 
 #[tokio::test]
 async fn binary_values_preserve_bounds_and_bytes_in_wasm() {
-    use ic_wire::ByteBuf;
+    use ic_db_qualification_transport::fixture_wire::ByteBuf;
     type Value = (ByteBuf, Option<ByteBuf>);
     let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
@@ -825,7 +825,7 @@ async fn narrow_numbers_preserve_widths_absence_and_message_rollback() {
 
 #[tokio::test]
 async fn principal_identity_bytes_survive_wasm_reopen_and_rollback() {
-    use ic_wire::ByteBuf;
+    use ic_db_qualification_transport::fixture_wire::ByteBuf;
     type Value = (ByteBuf, Option<ByteBuf>);
     let wasm = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
@@ -927,7 +927,7 @@ async fn principal_identity_bytes_survive_wasm_reopen_and_rollback() {
 
 #[tokio::test]
 async fn typed_index_order_uniqueness_and_rollback_survive_wasm_reopen() {
-    use ic_wire::ByteBuf;
+    use ic_db_qualification_transport::fixture_wire::ByteBuf;
     type Read = (Vec<u64>, Vec<(i64, u64)>);
     type Write = Vec<(u64, ByteBuf, i64)>;
     let wasm = ic_db_m0_rollback_driver::records_wasm();
@@ -1094,7 +1094,7 @@ async fn text_index_boundaries_and_boolean_prefixes_survive_wasm_updates() {
 
 #[tokio::test]
 async fn optional_membership_and_unique_transfer_survive_wasm_rollback() {
-    use ic_wire::ByteBuf;
+    use ic_db_qualification_transport::fixture_wire::ByteBuf;
     type Writes = Vec<(u64, Option<ByteBuf>, Option<u64>)>;
     type Read = (Result<Vec<u64>, u8>, Vec<(Option<u64>, u64)>);
     let wasm = ic_db_m0_rollback_driver::records_wasm();

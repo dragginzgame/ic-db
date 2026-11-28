@@ -46,8 +46,8 @@ This overlay owns local authority, product boundaries and qualification choices.
 - Retain broad bounded fluent queries, schema types, reference integrity and
   constrained resumable aggregation. SQL, joins and window functions are excluded.
   Ordinary result mapping uses Rust iterators, not engine callback hooks.
-- IC DB owns its durable codec. Keep Wire out of the default dependency graph and all stored bytes. The optional
-  `wire` feature owns binary Serde inspection for application contracts. Version durable changes; unsupported
+- IC DB owns its durable codec and Serde values. Canic adapters own endpoint framing,
+  transport DTOs and inspection. Keep Wire out of the database and schema macros. Version durable changes; unsupported
   formats refuse intact until a supported transition exists.
 - IC Storage owns allocation/collections. Qualification borrows PocketIC's
   original async client through Testkit's default-feature-free export; a prepared

@@ -32,9 +32,9 @@ fn named_payload_filters_keep_their_wire_positions() {
         Some(vec![2]),
         Some(vec![3]),
     ];
-    let frame = || ic_wire::Encoding::Frame {
+    let frame = || canic::wire::Encoding::Frame {
         method: 3,
-        direction: ic_wire::Direction::Request,
+        direction: canic::wire::Direction::Request,
     };
     assert_eq!(
         fixture_wire::encode(&filters, frame(), super::LIMITS).unwrap(),

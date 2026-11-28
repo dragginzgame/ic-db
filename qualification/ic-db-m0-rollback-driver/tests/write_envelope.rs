@@ -1,5 +1,6 @@
 //! Real Wasm envelope witness with independent row/index byte expectations.
 
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 mod envelope_support;
 
 mod wire_frame;
@@ -8,7 +9,7 @@ use ic_testkit::pocket_ic::ErrorCode;
 
 use std::collections::BTreeMap;
 
-type RawPage = Vec<(Vec<u8>, ic_wire::ByteBuf)>;
+type RawPage = Vec<(Vec<u8>, ByteBuf)>;
 type Read = (Vec<u64>, u64, u64);
 
 #[tokio::test]

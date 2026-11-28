@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.40.0] - Unreleased
+
+### ⚠️ Breaking
+
+- Remove the `ic-db/wire` feature and the `wire` schema declaration option. Move endpoint DTOs and their inspection to the Canic adapter. The local console uses the Canic framing codec. [Migration guide](README.md#inspect-application-types-with-ic-wire)
+
+### 🔄 Changed
+
+- Share query construction, batch delete preparation and entity metadata reads across entity types. On the matched eight-shape fixture, Wasm growth fell from 4,393 to 3,957 bytes per added entity, with 13–449 additional instructions per warm fluent query.
+
 ## [0.39.0] - 2026-11-28
 
 ### ⚠️ Breaking

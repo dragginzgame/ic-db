@@ -526,11 +526,7 @@ product contract. The grammar below settles what those encodings must identify;
 the product's exact tags and byte vectors must be fixed before M1 persists them.
 
 IC DB owns durable row encoding and decoding, independently of transport formats.
-The default product excludes IC Wire. The optional `wire` feature describes
-application payloads using the existing binary Serde layouts. The schema author
-selects the declarations included in inspection. As in frozen IcyDB `6d421e3`’s
-0.277 Wire trial, the host owns endpoint transport. IC DB supplies type metadata
-without adding endpoint registration or changing the durable contract. Generate storage traversal in canonical
+Canic adapters own endpoint transport and inspection. Applications declare the fields exposed over an endpoint and convert validated values at the handler boundary. This preserves the host-owned transport principle from the frozen IcyDB `6d421e3` Wire trial. The engine and its schema macros supply Serde and durable codecs; neither registers transport schemas. Generate storage traversal in canonical
 field-name order so names need not be repeated in each row; keep primary/index key
 encoding separate because payload byte order does not establish index ordering.
 A field rename still changes schema identity. Database admission enforces field

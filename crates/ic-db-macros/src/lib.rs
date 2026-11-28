@@ -141,13 +141,6 @@ fn membership(name: &syn::Ident) -> Tokens {
     }
 }
 
-/// In a storage-only build, selected declarations need no transport metadata.
-#[doc(hidden)]
-#[proc_macro_derive(__StorageOnly, attributes(wire))]
-pub fn storage_only(_: TokenStream) -> TokenStream {
-    TokenStream::new()
-}
-
 fn owner_path(meta: &Meta) -> syn::Result<syn::Path> {
     if let Meta::NameValue(pair) = meta
         && let Expr::Path(path) = &pair.value
@@ -165,7 +158,7 @@ struct Index {
 }
 
 // Supply Serde through ic-db even in schema crates without a direct serde dependency.
-fn schema_attrs(attrs: &[syn::Attribute], wire: bool) -> syn::Result<Tokens> {
+fn schema_attrs(attrs: &[syn::Attribute]) -> syn::Result<Tokens> {
     let mut serialize = true;
     let mut deserialize = true;
     let mut supply_crate = true;
@@ -187,56 +180,10 @@ fn schema_attrs(attrs: &[syn::Attribute], wire: bool) -> syn::Result<Tokens> {
     }
     let ser = serialize.then(|| quote!(#[derive(::ic_db::__private::serde::Serialize)]));
     let de = deserialize.then(|| quote!(#[derive(::ic_db::__private::serde::Deserialize)]));
-    let path = (!wire && supply_crate && (serialize || deserialize))
+    let path = (supply_crate && (serialize || deserialize))
         .then(|| quote!(#[serde(crate = "::ic_db::__private::serde")]));
 
-    let projection = wire.then(|| {
-        quote!(
-            #[derive(::ic_db::__private::WireSchema)]
-            #[wire(crate = "::ic_db::__private::ic_wire")]
-        )
-    });
-    Ok(quote!(#ser #de #projection #(#attrs)* #path))
-}
-
-// Transport export is selected per declaration, independently of storage identity.
-fn declaration_options(args: Tokens) -> syn::Result<(bool, Vec<Meta>)> {
-    let mut options = metas(args)?;
-    let Some(position) = options
-        .iter()
-        .position(|meta| matches!(meta, Meta::Path(path) if path.is_ident("wire")))
-    else {
-        return Ok((false, options));
-    };
-    options.remove(position);
-    if let Some(duplicate) = options.iter().find(|meta| meta.path().is_ident("wire")) {
-        return Err(syn::Error::new_spanned(duplicate, "duplicate wire option"));
-    }
-    Ok((true, options))
-}
-
-fn wire_as(
-    wire: bool,
-    attrs: &[syn::Attribute],
-    name: &syn::Ident,
-    layout: &Tokens,
-) -> syn::Result<Tokens> {
-    if !wire {
-        return Ok(Tokens::new());
-    }
-    if let Some(attr) = attrs.iter().find(|attr| {
-        attr.path().is_ident("cfg_attr")
-            || (attr.path().is_ident("serde")
-                && !attr
-                    .parse_args::<syn::Ident>()
-                    .is_ok_and(|ident| ident == "transparent"))
-    }) {
-        return Err(syn::Error::new_spanned(
-            attr,
-            "Wire projection requires the standard Serde layout",
-        ));
-    }
-    Ok(quote!(::ic_db::__wire_as!(#name, #layout);))
+    Ok(quote!(#ser #de #(#attrs)* #path))
 }
 
 fn metas(tokens: Tokens) -> syn::Result<Vec<Meta>> {
@@ -362,8 +309,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     let mut authored = None;
     let mut timestamps = None;
     let mut indexes = Vec::new();
-    let (wire, options) = crate::declaration_options(args)?;
-    for meta in options {
+    for meta in metas(args)? {
         if meta.path().is_ident("name") {
             once(&mut logical_name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("store") {
@@ -615,7 +561,7 @@ fn expand(args: Tokens, item: Tokens) -> syn::Result<Tokens> {
     }
     let lookup_keys = unique_keys.declarations;
     let name = &item.ident;
-    let attrs = crate::schema_attrs(&item.attrs, wire)?;
+    let attrs = crate::schema_attrs(&item.attrs)?;
     let visibility = &item.vis;
     let mut ordered: Vec<_> = authored.iter().collect();
     ordered.sort_by_key(|field| &field.name);

@@ -3,7 +3,7 @@
 
 mod wire_frame;
 use ic_db_m0_rollback_driver::instance;
-use ic_wire::ByteBuf;
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 use wire_frame::{request, response};
 
 fn wasm(variable: &str) -> Vec<u8> {

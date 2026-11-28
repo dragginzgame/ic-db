@@ -1,5 +1,6 @@
 //! Retained filters, Decimal rounding and Blob results through the console across upgrades.
 
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 mod wire_call;
 
 use ic_db_m0_rollback_driver::{instance, upgrade_stopped};
@@ -205,7 +206,7 @@ async fn distinct_jobs_resume_from_v0331_with_fresh_page_cursors() {
     ) -> T {
         use ic_db_cli::fixture_wire;
         use ic_db_m0_rollback_driver::LIMITS;
-        use ic_wire::{Direction, Encoding};
+        use ic_db_qualification_transport::fixture_wire::{Direction, Encoding};
         let frame = |direction| Encoding::Frame { method, direction };
         // The old positional body omits the empty root extension block.
         let mut request = fixture_wire::encode(body, frame(Direction::Request), LIMITS).unwrap();
@@ -833,13 +834,7 @@ async fn retained_blobs_preserve_values_binding_and_cleanup_after_upgrade() {
             canister,
             "replace_binary_object",
             14,
-            &(
-                (
-                    ic_wire::ByteBuf::from(payload),
-                    optional.map(ic_wire::ByteBuf::from),
-                ),
-                false,
-            ),
+            &((ByteBuf::from(payload), optional.map(ByteBuf::from)), false),
         )
         .await
         .unwrap();

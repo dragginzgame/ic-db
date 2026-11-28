@@ -166,13 +166,10 @@ or proving the range empty. Use `fetch()` to resume such scans.
 Omit `using_index` for default primary-key result order. Filter operands must match the exact
 declared type. Pass a borrowed `String` or `Vec<u8>` directly, such as
 `.eq(Document::TITLE, &title)`. A byte literal such as `b"abc"` is a Blob operand.
-Endpoint request and reply fields can use `Option<ic_db::QueryCursor>` directly.
-Wire preserves the length-prefixed `Option<Vec<u8>>` payload. With the optional
-`wire` feature, generated TypeScript clients receive a `Uint8Array` of up to
-546 bytes for a present cursor and can pass it directly to the next request. Decoding rejects invalid
-frame sizes, versions and resume flags. Query execution checks the binding and
-key shape. To handle framing errors as typed application errors, accept bytes
-and call `QueryCursor::from_bytes` explicitly.
+A Canic endpoint can expose an optional bounded byte string for a continuation.
+Encode it with `QueryCursor::to_bytes`; admit incoming bytes with
+`QueryCursor::from_bytes` before calling `.after(&cursor)`. The database checks
+the cursor’s query binding and key shape during execution.
 `page.next` resumes the same query through `.after(&cursor)`;
 an empty page can still carry a continuation. IC DB automatically caps each
 query response at 128 KiB of encoded rows. Transport framing remains host-owned. This first slice supports AND
@@ -941,7 +938,7 @@ a required project owner. Construct it with `NonAnonymousPrincipal::try_from(pri
 Ordinary `Principal` fields still accept the anonymous identity. The management
 canister principal is valid for both types. Applications still decide who may act
 as the owner. A domain-specific wrapper can use
-`#[newtype(wire, item(prim = "Principal"), validate(non_anonymous))]`.
+`#[newtype(item(prim = "Principal"), validate(non_anonymous))]`.
 
 For text, use `#[newtype(item(prim = "Text", max_bytes = 200), validate(non_blank, max_chars = 50))]`.
 Construct the named type with `try_from(String)`. Either rule can appear on its own.
@@ -1000,55 +997,21 @@ apply the declared database bounds.
 
 ### Inspect application types with IC Wire
 
-Enable IC DB’s optional `wire` feature in a schema crate or application that
-exports endpoint metadata. A shared schema crate can forward a Cargo feature
-such as `inspection = ["ic-db/wire"]`. Its storage-only consumers can leave it
-disabled, including when the declarations carry the `wire` marker. Its build
-script can use just `ic-db/build`. Include Serde as a direct dependency wherever
-the marked declarations compile, including build dependencies for a shared schema. Ordinary
-application request and reply structs derive `ic_wire::Wire` with IC Wire 0.33.
-Each message carries a sparse root extension block. Regenerate clients and upgrade
-both peers together when moving from 0.32. For a scalar or enum root, wrap the
-value in `ic_wire::Message<T>`. Marked database types expose their positional
-Serde layout as fields inside these messages. Enabling `ic-db/wire` supplies
-TypeScript inspection and platform type support. Enable IC Wire’s `api-manifest`
-feature on the host for offline inspection.
+Endpoint inspection belongs to the Canic adapter. Declare request and reply
+fields there and convert to database types in the handler. For example, a
+ULID-backed ID uses a 16-byte array, and a continuation uses
+`canic::wire::Bytes<{ ic_db::QueryCursor::MAX_ENCODED_BYTES }>`. Use
+`Id::from_key` with the admitted key and `QueryCursor::from_bytes` on input.
+The [pagination fixture](qualification/experiments/wire-schema/src/main.rs)
+checks the binary contract and exercises the generated TypeScript client.
 
-```rust
-use ic_db::design::prelude::*;
+When upgrading, remove the `ic-db/wire` Cargo feature and the `wire` option on
+`entity`, `record`, `enum_`, `newtype`, `list`, `set` and `map` declarations.
+These options previously supplied endpoint metadata. Database declarations
+continue to generate Serde implementations. Preserve public field order, enum
+tags, scalar representations and bounds in the adapter’s request and reply types.
 
-#[enum_(wire, variant(name = "Allow"), variant(name = "Suspend"))]
-struct Action {}
-
-#[derive(serde::Serialize, serde::Deserialize, ic_wire::Wire)]
-struct UserAdminRequest {
-    user_id: Ulid,
-    action: Action,
-}
-```
-
-Select `wire` on each exported entity, record, enum, newtype, list, set or map
-declaration, including nested declarations. A row exports every Serde field in
-its generated Rust order. Define a DTO to expose a subset. This option describes
-endpoint payloads and grants no access to stored data.
-
-| Design value | Binary Wire representation |
-| --- | --- |
-| ULID | Fixed array of 16 unsigned bytes |
-| Date, Timestamp, Duration | Signed 32-bit epoch days, signed 64-bit milliseconds, unsigned 64-bit milliseconds |
-| Decimal, Float32, Float64 | Canonical decimal text, finite binary32, finite binary64 |
-| Blob, Text, Bool, native integers through 128 bits | Wire’s existing byte-element list, text, boolean and integer shapes |
-| Principal, Account, Subaccount | Wire’s Platform implementations for Principal and Account. Standalone Subaccount uses its fixed 32-byte array type. |
-| Entity, record, enum | Generated Serde field order and enum tags. Endpoints serialize entity fields in authored order and record fields and enum variants in canonical name order. |
-| Newtype, list, set, map | Wrapped value, ordered list, ordered list of set elements, ordered list of key/value pairs |
-| U256 | Hexadecimal quantity text, including the `0x` prefix. Rows and index keys use 32 big-endian bytes. |
-
-Database bounds, decimal parsing, date ranges, and set/map uniqueness are enforced
-by their respective owners. The Wire schema describes the binary payload shape.
-Canisters, stores, schema descriptors and generators are application infrastructure.
-
-IC DB owns its durable row codec. Storage-only builds exclude IC Wire. Transport format
-changes cannot change persisted decoding. The current experimental codec identity
+IC DB owns its durable row codec. The current experimental codec identity
 is version 3, adapting IcyDB's owned fixed-width scalar approach; opening a
 version 1 or 2 codec contract refuses without changing its data. The named schema
 grammar is version 2; earlier numbered contracts also refuse intact.

@@ -1,12 +1,13 @@
 //! Executable admission and interrupted copy/cutover/cancellation against real Wasm.
 
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 mod wire_frame;
 use ic_db_m0_rollback_driver::instance;
 
 use std::path::PathBuf;
 
 type Page = (Vec<(u64, u64)>, Option<u64>, u64);
-type CapacityInspection = ([u64; 5], ic_wire::ByteBuf, Vec<(u64, u64)>);
+type CapacityInspection = ([u64; 5], ByteBuf, Vec<(u64, u64)>);
 
 fn artifacts() -> PathBuf {
     PathBuf::from(std::env::var_os("IC_DB_M0_MAINTENANCE_DIR").expect("run make m0-maintenance"))

@@ -7,7 +7,7 @@ pub mod mixed;
 pub use hooks::*;
 pub use ic_db_cli::fixture_wire;
 
-use ic_wire::{Direction, Encoding, Error, Limits};
+use crate::fixture_wire::{Direction, Encoding, Error, Limits};
 use serde::{Serialize, de::DeserializeOwned};
 
 /// Decoded request and the instruction meter supplied by installed dispatch.

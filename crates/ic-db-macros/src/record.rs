@@ -9,8 +9,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let fail = |message| syn::Error::new_spanned(&item.ident, message);
     let mut name = None;
     let mut fields = None;
-    let (wire, options) = crate::declaration_options(args)?;
-    for meta in options {
+    for meta in crate::metas(args)? {
         if meta.path().is_ident("name") {
             once(&mut name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("fields") {
@@ -82,7 +81,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let field_constants = super::field_constants(&fields, &item.ident)?;
     let ident = item.ident;
     let visibility = item.vis;
-    let attrs = crate::schema_attrs(&item.attrs, wire)?;
+    let attrs = crate::schema_attrs(&item.attrs)?;
 
     Ok(quote! {
         #attrs

@@ -12,8 +12,7 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let item = declaration(item, "map")?;
     let fail = |message| syn::Error::new_spanned(&item.ident, message);
     let (mut name, mut key, mut value, mut max) = (None, None, None, None);
-    let (wire, options) = crate::declaration_options(args)?;
-    for meta in options {
+    for meta in crate::metas(args)? {
         if meta.path().is_ident("name") {
             once(&mut name, text(&meta)?, &meta)?;
         } else if meta.path().is_ident("key") {
@@ -47,19 +46,12 @@ pub(super) fn expand(args: TokenStream, item: TokenStream) -> syn::Result<TokenS
     let vr = value.read_result();
     let ident = item.ident;
     let visibility = item.vis;
-    let attrs = crate::schema_attrs(&item.attrs, false)?;
-    let projection = crate::wire_as(
-        wire,
-        &item.attrs,
-        &ident,
-        &quote!(::std::vec::Vec<(#kt, #vt)>),
-    )?;
+    let attrs = crate::schema_attrs(&item.attrs)?;
 
     Ok(quote! {
         #attrs
         #[derive(Clone, Debug, Default, PartialEq, Eq)]
         #visibility struct #ident(#[doc="Authored bounded map."] pub ::std::collections::BTreeMap<#kt,#vt>);
-        #projection
         impl ::ic_db::Value for #ident {
             const NAME: &'static str = #name;
             fn definition() -> &'static ::ic_db::TypeSchema {

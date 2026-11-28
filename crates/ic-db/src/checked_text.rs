@@ -39,18 +39,3 @@ impl<'de, const B: u32, const N: bool, const C: u32> serde::Deserialize<'de>
             .map_err(serde::de::Error::custom)
     }
 }
-
-#[cfg(feature = "wire")]
-impl<const B: u32, const N: bool, const C: u32> ic_wire::evolution::inline::Fixed
-    for CheckedText<B, N, C>
-{
-}
-
-#[cfg(feature = "wire")]
-impl<const B: u32, const N: bool, const C: u32> ic_wire::typescript::Wire for CheckedText<B, N, C> {
-    fn schema(
-        context: &mut ic_wire::typescript::SchemaContext,
-    ) -> Result<ic_wire::typescript::__private::Value, ic_wire::typescript::GenerationError> {
-        context.describe::<str>()
-    }
-}

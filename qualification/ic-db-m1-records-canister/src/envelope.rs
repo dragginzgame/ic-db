@@ -4,6 +4,7 @@
 use super::{Batch, Entity, KEY, open, runtime};
 use crate::raw_map::RawMap;
 use ic_db::Error;
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 use ic_storage::StableKey;
 use records_schema::EnvelopeRow;
 use std::ops::Bound;
@@ -199,4 +200,4 @@ pub(super) fn write(
     db.commit(batch)
 }
 
-type RawPage = Vec<(Vec<u8>, ic_wire::ByteBuf)>;
+type RawPage = Vec<(Vec<u8>, ByteBuf)>;

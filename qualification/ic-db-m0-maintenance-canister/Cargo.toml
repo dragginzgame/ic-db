@@ -24,7 +24,6 @@ bad-upgrade = ["target"]
 ic-db-qualification-transport.workspace = true
 ic-platform-runtime = { workspace = true, features = ["entrypoint-macros", "system-raw"] }
 ic-storage.workspace = true
-ic-wire.workspace = true
 
 [dev-dependencies]
 toko-tooling.workspace = true

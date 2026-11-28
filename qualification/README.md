@@ -13,10 +13,10 @@ In a native cross-version check, Storage 0.80.0 refused all 262,144 bytes of a p
 Storage 0.80 records codec bounds in the map header. Raw DB probes use the physical 512-byte variable key bound and an unbounded byte value. Opening with different bounds refuses before writing. The installed count witness preserved stable backing across an ordinary upgrade.
 
 Package directories match their Cargo package names. The CLI and standalone qualification endpoints use
-Wire 0.33.1 sparse frames around their positional fixture bodies, with explicit
+Canic’s bounded sparse frames around positional fixture bodies with explicit
 directions, method IDs and resource limits. The mixed-lifecycle fixture uses
-Canic 0.278.0 and IC Platform Runtime 0.23.28. Its driver uses Canic’s Wire
-codec and limits for the mounted inspection, query and write endpoints. The
+Canic 0.278.0 and IC Platform Runtime 0.23.28. Standalone fixtures also use
+the Canic codec, retaining admission of unknown optional extensions. The
 archived-console upgrade test adapts the empty root extension block when
 exchanging frames with the v0.33.1 console before the upgrade.
 The frozen IcyDB comparison
@@ -89,17 +89,12 @@ code stayed at 352 lines.
 
 ## Application Wire schemas
 
-The [downstream probe](experiments/wire-schema/src/main.rs) checks API manifests,
-binary scalar layouts, generated enums, nested collections and an entity whose
-endpoint field order differs from its storage order. `make m0-contracts` runs
-the host checks, including a generated TypeScript pagination method executed
-with Node.js (`--experimental-transform-types`, tested on Node 24). Rust emits
-the first page’s continuation, the client returns it as a bounded `Uint8Array`,
-and the database retrieves the second row. The reply also carries an `Id<User>` backed by a ULID. Canic’s mounted method
-inspection resolves the typed ID to a 16-byte array and the optional cursor to
-at most 546 bytes in both directions. The sparse root changes the endpoint
-frame. The cursor field retains its existing length-prefixed bytes, and the DB
-continues to use its own codec for stored rows and keys.
+The [adapter probe](experiments/wire-schema/src/main.rs) checks the Serde bytes
+of DB values and Canic inspection of endpoint-owned key and cursor fields.
+`make m0-contracts` also exercises a generated TypeScript method with Node:
+the reply contains a fixed 16-byte key and a bounded cursor. The client
+returns the cursor, the handler validates its bytes, and the DB retrieves the
+second row. The adapter uses the same sparse frames as the prior typed fields.
 
 For [issue #37](https://github.com/dragginzgame/ic-db/issues/37), an isolated
 consumer ran all six inspection and payload tests against the crates.io releases
@@ -107,7 +102,7 @@ of IC DB 0.38.0, IC Wire 0.33.1 and Canic 0.278.0.
 To run the byte checks compiled for Wasm from the repository root:
 
 ```sh
-cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-wire-schema-probe --features inspection --target wasm32-unknown-unknown --release
+cargo build --manifest-path qualification/Cargo.toml --locked -p ic-db-wire-schema-probe --target wasm32-unknown-unknown --release
 node -e 'const m = new WebAssembly.Module(require("node:fs").readFileSync(process.argv[1])); process.exitCode = new WebAssembly.Instance(m).exports.main(0, 0)' qualification/target/wasm32-unknown-unknown/release/ic-db-wire-schema-probe.wasm
 ```
 
@@ -542,7 +537,7 @@ used `retained-host,fluent-shapes,entities-32` for artifact sizing only.
 | Ordinary writes | Journaled writes with follow-up work in the measured host | Synchronous bounded final-state batches, preparation before mutation, IC message rollback; no ordinary-write WAL |
 | Durable schema authority | Accepted schema snapshots and runtime binding/admission | Compiled contract admitted against a minimal manifest; explicit versioned maintenance, no runtime DDL or online activation |
 | Endpoints | Generated actor wiring and facade surfaces | Canic owns product endpoints/guards; standalone library use remains possible. Canic owns remote inspection and application listing endpoints; IC DB CLI query demos run locally |
-| Codec boundary | Owned codec/runtime plus a product `ic-wire` dependency | IC DB owns the durable codec. The optional runtime `wire` feature supports application contracts. The CLI host and qualification transport also use Wire. |
+| Codec boundary | Owned codec/runtime plus a product `ic-wire` dependency | IC DB owns the durable codec. Canic adapters own endpoint framing and inspection for the CLI and qualification. |
 
 Structural findings are from the frozen
 [workspace manifest](https://github.com/dragginzgame/icydb-legacy/blob/6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac/Cargo.toml),

@@ -2,8 +2,8 @@
 
 use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
+use ic_db_qualification_transport::fixture_wire::{ByteBuf, Direction, Encoding};
 use ic_testkit::pocket_ic::ErrorCode;
-use ic_wire::{ByteBuf, Direction, Encoding};
 
 type Entries = Vec<(u64, u64)>;
 type Snapshot = (Entries, Entries, Entries, [u64; 2]);

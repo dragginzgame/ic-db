@@ -1,7 +1,7 @@
 //! Local probes borrow an explicitly selected server; the launcher owns its process.
 
+use canic::wire::Limits;
 use ic_testkit::pocket_ic::{self, PocketIcBuilder, nonblocking::PocketIc};
-use ic_wire::Limits;
 use std::time::Duration;
 
 /// Upgrade a local fixture only after the IC has completed its stop request.

@@ -2,6 +2,7 @@
 //! This candidate is never published: the existing v2 rows/index remain live.
 
 use super::{FORMAT, KEYS, Map, PHASE, RETIRED, SCHEMA, fail_at, field, map, runtime, target};
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 use ic_storage::{DefaultMemoryImpl, StableKey, adapter::StableBTreeMap};
 
 // Start/reset or copy at most two rows. Width is an explicit fixed probe input.
@@ -131,7 +132,7 @@ type Candidate = StableBTreeMap<u64, Vec<u8>, DefaultMemoryImpl>;
 const STATE: u64 = 6;
 const POSITION: u64 = 7;
 const WIDTH: u64 = 8;
-type Inspection = ([u64; 5], ic_wire::ByteBuf, Vec<(u64, u64)>);
+type Inspection = ([u64; 5], ByteBuf, Vec<(u64, u64)>);
 
 fn eligible(control: &Map) -> Result<(), u8> {
     if SCHEMA != 2 || field(control, FORMAT)? != 2 || field(control, PHASE)? != 0 {

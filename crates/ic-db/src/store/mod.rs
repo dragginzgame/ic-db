@@ -307,10 +307,15 @@ impl Batch {
     /// # Errors
     /// Refuses batch capacity before persistent mutation.
     pub fn delete<E: Entity>(&mut self, key: impl Into<crate::Id<E>>) -> Result<(), Error> {
+        self.delete_key(E::SCHEMA, key.into().key().into_row_key())
+    }
+
+    #[inline(never)]
+    fn delete_key(&mut self, entity: &'static EntitySchema, key: RowKey) -> Result<(), Error> {
         self.push(
             Mutation {
-                entity: E::SCHEMA,
-                key: key.into().key().into_row_key(),
+                entity,
+                key,
                 kind: Kind::Delete,
             },
             0,
@@ -464,9 +469,7 @@ impl<M: Memory> Database<M> {
     /// # Errors
     /// Refuses unknown entities and malformed revision metadata.
     pub fn revision<E: Entity>(&self) -> Result<u64, Error> {
-        let entity = self.schema.admits(E::SCHEMA)?;
-
-        read_revision(&self.map, entity.id)
+        Ok(self.admitted_state(E::SCHEMA)?.revision)
     }
 
     /// Read the exact maintained whole-entity row count without scanning rows.
@@ -477,9 +480,13 @@ impl<M: Memory> Database<M> {
     /// # Panics
     /// Supplier corruption may trap; this operation never repairs storage.
     pub fn cardinality<E: Entity>(&self) -> Result<u64, Error> {
-        let entity = self.schema.admits(E::SCHEMA)?;
+        Ok(self.admitted_state(E::SCHEMA)?.count)
+    }
 
-        Ok(read_entity_state(&self.map, entity.id)?.count)
+    #[inline(never)]
+    fn admitted_state(&self, proposed: &EntitySchema) -> Result<EntityState, Error> {
+        let entity = self.schema.admits(proposed)?;
+        read_entity_state(&self.map, entity.id)
     }
 
     /// Inspect the maintained whole-entity count by exact admitted schema name.

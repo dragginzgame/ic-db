@@ -28,15 +28,15 @@ console = [
     "dep:shlex",
     "tokio/rt-multi-thread",
 ]
-fixture-wire = ["dep:ic-wire"]
+fixture-wire = ["dep:canic"]
 host = ["dep:ic-testkit", "fixture-wire", "dep:tokio"]
 
 [dependencies]
+canic = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }
 ic-db = { workspace = true, optional = true }
 ic-host-text = { workspace = true, optional = true }
 ic-testkit = { workspace = true, optional = true }
-ic-wire = { workspace = true, optional = true }
 rustyline = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }

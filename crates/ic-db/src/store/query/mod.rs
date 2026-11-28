@@ -847,6 +847,9 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
         Self::new(QuerySource::Session(db))
     }
 
+    // Keep construction, filter and order_by out of the caller. These builders
+    // can share Wasm across entities since none of them reads E::SCHEMA.
+    #[inline(never)]
     fn new(db: QuerySource<'a, M>) -> Self {
         Self {
             db,
@@ -888,6 +891,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// undergo integrity checks; oversized derived bounds remain residual filters.
     /// Indexed StartsWith can seek that field's exact encoded Text/Blob prefix too.
     #[must_use]
+    #[inline(never)]
     pub fn filter(
         mut self,
         field: &'a str,
@@ -1165,6 +1169,7 @@ impl<'a, E: Entity, M: Memory> Query<'a, E, M> {
     /// or an order led by all varying projected fields. Equality terms may fix
     /// leading index components. With `using_index`, require that path's order.
     #[must_use]
+    #[inline(never)]
     pub fn order_by(mut self, fields: &[impl Copy + Into<OrderTerm<'a>>]) -> Self {
         self.request.order_by(fields);
 

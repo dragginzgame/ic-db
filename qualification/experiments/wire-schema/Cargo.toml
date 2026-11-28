@@ -14,19 +14,14 @@ ignored = ["toko-tooling"]
 [package.metadata.toko-tooling.loc]
 category = "tests"
 
-[features]
-inspection = ["ic-db/wire", "dep:ic-wire"]
-
 [dependencies]
 ic-db.workspace = true
-ic-wire = { workspace = true, optional = true }
 postcard.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 canic = { workspace = true, features = ["inspection"] }
 ic-db = { workspace = true, features = ["test-support"] }
-ic-wire = { workspace = true, features = ["api-manifest"] }
 serde_json.workspace = true
 
 [lints]

@@ -257,6 +257,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "canic"
+version = "0.278.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c1290edd3234c70fc7ceaebe16b2ec955b41eeebacc960389039e2b4aa4e3be"
+dependencies = [
+ "ic-wire",
+ "serde",
+]
+
+[[package]]
 name = "cc"
 version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -895,7 +905,6 @@ dependencies = [
  "ic-platform-runtime",
  "ic-platform-types",
  "ic-storage",
- "ic-wire",
  "memchr",
  "serde",
  "serde_json",
@@ -908,11 +917,11 @@ dependencies = [
 name = "ic-db-cli"
 version = "0.39.0"
 dependencies = [
+ "canic",
  "clap",
  "ic-db",
  "ic-host-text",
  "ic-testkit",
- "ic-wire",
  "rustyline",
  "serde",
  "serde_json",
@@ -1038,24 +1047,22 @@ dependencies = [
 
 [[package]]
 name = "ic-wire"
-version = "0.33.1"
+version = "0.33.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbe99a03e083340899084fef793e95c617803117c7067b86f5b372f876357cb8"
+checksum = "ae5ef81aa60d253201ab6b576b05878304e2065c5718b4c2236a08383089a08c"
 dependencies = [
  "bytemuck",
- "ic-platform-types",
  "ic-wire-derive",
  "postcard",
  "serde",
  "serde_bytes",
- "serde_json",
 ]
 
 [[package]]
 name = "ic-wire-derive"
-version = "0.33.1"
+version = "0.33.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9d4c198e0163c12b23cb4ccfab660439fd895c6cbacd6a15c3f5e8f6595edfc"
+checksum = "6bcd8104fb56f58e95f8f91f94103b321cd02a4df4bdd68c05130b1ea0ff7995"
 dependencies = [
  "proc-macro2",
  "quote",

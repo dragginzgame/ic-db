@@ -10,6 +10,8 @@
 //! Local host for the actual M1 record library. Wire exports are private test
 //! controls; production endpoints and authorization belong to the Canic adapter.
 
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
+
 #[path = "../../../crates/ic-db/tests/support/raw_map.rs"]
 pub mod raw_map;
 #[cfg(test)]
@@ -806,7 +808,7 @@ fn replace_narrow_numbers((value, trap): (NarrowValue, bool)) -> EmptyReply {
     clippy::needless_pass_by_value,
     reason = "Platform entrypoints receive an owned decoded request"
 )]
-fn binary_decodes(bytes: ic_wire::ByteBuf) -> bool {
+fn binary_decodes(bytes: ByteBuf) -> bool {
     BinaryObject::decode(bytes.as_ref()).is_ok()
 }
 
@@ -855,7 +857,7 @@ fn replace_binary_object(((payload, optional), trap): (BinaryValue, bool)) -> Re
         .replace(&BinaryObject {
             id: 1,
             payload: payload.into_vec(),
-            optional: optional.map(ic_wire::ByteBuf::into_vec),
+            optional: optional.map(ByteBuf::into_vec),
         })
         .map_err(|_| 1)?;
     db.commit(batch).map_err(|_| 2)?;
@@ -945,7 +947,7 @@ fn replace_principal_record(((owner, optional), trap): (PrincipalValue, bool)) -
     clippy::needless_pass_by_value,
     reason = "Platform entrypoints receive an owned decoded request"
 )]
-fn principal_decodes(bytes: ic_wire::ByteBuf) -> bool {
+fn principal_decodes(bytes: ByteBuf) -> bool {
     IdentityRow::decode(bytes.as_ref()).is_ok()
 }
 
@@ -1007,7 +1009,7 @@ fn indexed_batch((rows, trap): (Vec<IndexedWrite>, bool)) -> Result<(), u8> {
     clippy::needless_pass_by_value,
     reason = "Platform entrypoints receive an owned decoded request"
 )]
-fn typed_indexes(owner: ic_wire::ByteBuf) -> Result<IndexedRead, u8> {
+fn typed_indexes(owner: ByteBuf) -> Result<IndexedRead, u8> {
     let principal = Principal::try_from_slice(owner.as_ref()).map_err(|_| 1)?;
     let host = runtime();
     let db = open(&host);
@@ -1150,7 +1152,7 @@ fn optional_index_batch((rows, trap): (OptionalWrites, bool)) -> Result<(), u8> 
     clippy::needless_pass_by_value,
     reason = "Platform entrypoints receive an owned decoded request"
 )]
-fn optional_indexes(value: Option<ic_wire::ByteBuf>) -> OptionalRead {
+fn optional_indexes(value: Option<ByteBuf>) -> OptionalRead {
     let host = runtime();
     let db = open(&host);
     let operand = value
@@ -2812,7 +2814,7 @@ type DocumentValue = (String, Option<String>, bool, Option<u64>, i64, Option<i64
 
 type WideValue = (i128, u128, Option<i128>, Option<u128>);
 
-type BinaryValue = (ic_wire::ByteBuf, Option<ic_wire::ByteBuf>);
+type BinaryValue = (ByteBuf, Option<ByteBuf>);
 type NarrowRequired = (i8, i16, i32, u8, u16, u32);
 type NarrowOptional = (
     Option<i8>,
@@ -2826,14 +2828,14 @@ type NarrowValue = (NarrowRequired, NarrowOptional);
 
 // Bytes cross the test transport; Principal admission and persistence belong to
 // their respective owners, never Wire's representation of an identity.
-type PrincipalValue = (ic_wire::ByteBuf, Option<ic_wire::ByteBuf>);
+type PrincipalValue = (ByteBuf, Option<ByteBuf>);
 
 // Private qualification controls; product endpoints remain adapter-owned.
-type IndexedWrite = (u64, ic_wire::ByteBuf, i64);
+type IndexedWrite = (u64, ByteBuf, i64);
 
 type IndexedRead = (Vec<u64>, Vec<(i64, u64)>);
 
-type OptionalWrites = Vec<(u64, Option<ic_wire::ByteBuf>, Option<u64>)>;
+type OptionalWrites = Vec<(u64, Option<ByteBuf>, Option<u64>)>;
 type OptionalRead = (Result<Vec<u64>, u8>, Vec<(Option<u64>, u64)>);
 
 // Optional relationships share the product batch; these are private probe controls.

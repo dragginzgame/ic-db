@@ -14,7 +14,6 @@ ignored = ["toko-tooling"]
 [features]
 build = ["dep:ctor"]
 test-support = []
-wire = ["dep:ic-wire"]
 logging = ["dep:ic-logging"]
 metrics = ["dep:ic-metrics"]
 
@@ -32,7 +31,6 @@ ic-logging = { workspace = true, optional = true }
 ic-metrics = { workspace = true, optional = true }
 ic-platform-types.workspace = true
 ic-storage.workspace = true
-ic-wire = { workspace = true, optional = true, features = ["platform-types", "typescript"] }
 memchr.workspace = true
 serde.workspace = true
 sha2.workspace = true

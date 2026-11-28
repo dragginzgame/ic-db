@@ -2,8 +2,9 @@
 //! Reply failure probes distinguish the current message from an earlier call.
 
 use crate::transport::fixture_wire;
+use ic_db_qualification_transport::fixture_wire::Limits;
+use ic_db_qualification_transport::fixture_wire::{ByteBuf, Direction, Encoding};
 use ic_platform_runtime::call::{Call, Outcome, Wait};
-use ic_wire::{ByteBuf, Direction, Encoding};
 
 // endpoint_sync
 // Exercise synchronous writes with a normal or oversized reply.
@@ -59,7 +60,7 @@ async fn endpoint_async(oversized: bool) -> ByteBuf {
     write(1);
     // An outgoing call ends the first execution; its writes survive callback traps.
     // Construct a request frame explicitly, not an empty unframed argument buffer.
-    let limits = ic_wire::Limits {
+    let limits = Limits {
         bytes: 64,
         allocation: 1024,
         nodes: 32,

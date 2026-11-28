@@ -1,5 +1,6 @@
 //! SQLite results and PocketIC costs for filtered and ordered document listings.
 
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 mod wire_call;
 
 use ic_db_m0_rollback_driver::instance;
@@ -43,11 +44,7 @@ async fn ordered_listing_paths_match_sqlite_page_by_page() {
     call::<Result<(), u8>>(pic, canister, "reference_batch", 10, &3_u8)
         .await
         .unwrap();
-    let outside = [(
-        2_u64,
-        ic_wire::ByteBuf::from(2_u64.to_be_bytes().to_vec()),
-        99_i64,
-    )];
+    let outside = [(2_u64, ByteBuf::from(2_u64.to_be_bytes().to_vec()), 99_i64)];
     call::<Result<(), u8>>(pic, canister, "indexed_batch", 21, &(&outside[..], false))
         .await
         .unwrap();
@@ -63,7 +60,7 @@ async fn ordered_listing_paths_match_sqlite_page_by_page() {
             let mut rows = Vec::new();
             for id in (3..=130_u64).filter(|id| (id % 12) as i64 == score) {
                 if (score % 4 == 0 || id % 13 == 0) == visible {
-                    rows.push((id, ic_wire::ByteBuf::from(id.to_be_bytes().to_vec()), score));
+                    rows.push((id, ByteBuf::from(id.to_be_bytes().to_vec()), score));
                     sql.execute(
                         "INSERT INTO docs VALUES (?1,1,?2,?3)",
                         rusqlite::params![id as i64, score, visible],
@@ -330,7 +327,7 @@ async fn ordered_listing_paths_match_sqlite_page_by_page() {
         set_template(true, Some(score)).await;
         let rows: Vec<_> = (131..=530_u64)
             .filter(|id| id % 2 == (score % 2) as u64)
-            .map(|id| (id, ic_wire::ByteBuf::from(id.to_be_bytes().to_vec()), score))
+            .map(|id| (id, ByteBuf::from(id.to_be_bytes().to_vec()), score))
             .collect();
         for chunk in rows.chunks(8) {
             call::<Result<(), u8>>(pic, canister, "indexed_batch", 21, &(chunk, false))
@@ -419,13 +416,13 @@ async fn measured_membership_and_empty_text_return_expected_counts() {
     .await;
 
     for (profile, width) in [("inline-blob", 8), ("external-blob", 1024)] {
-        let payload = ic_wire::ByteBuf::from(vec![7; width]);
+        let payload = ByteBuf::from(vec![7; width]);
         call::<Result<(), u8>>(
             pic,
             canister,
             "replace_binary_object",
             14,
-            &((payload, None::<ic_wire::ByteBuf>), false),
+            &((payload, None::<ByteBuf>), false),
         )
         .await
         .unwrap();
@@ -550,13 +547,7 @@ async fn projected_bulk_lookup_matches_full_and_fluent_reads() {
         .await
         .unwrap();
         let rows: Vec<_> = (2..=32_u64)
-            .map(|id| {
-                (
-                    id,
-                    ic_wire::ByteBuf::from(id.to_be_bytes().to_vec()),
-                    id as i64,
-                )
-            })
+            .map(|id| (id, ByteBuf::from(id.to_be_bytes().to_vec()), id as i64))
             .collect();
         for chunk in rows.chunks(8) {
             call::<Result<(), u8>>(pic, canister, "indexed_batch", 21, &(chunk, false))
@@ -586,13 +577,7 @@ async fn projected_bulk_lookup_matches_full_and_fluent_reads() {
     // Interleave missing odd keys with hits in separate B-tree leaves.
     let rows: Vec<_> = (34..=544_u64)
         .step_by(2)
-        .map(|id| {
-            (
-                id,
-                ic_wire::ByteBuf::from(id.to_be_bytes().to_vec()),
-                id as i64,
-            )
-        })
+        .map(|id| (id, ByteBuf::from(id.to_be_bytes().to_vec()), id as i64))
         .collect();
     for chunk in rows.chunks(8) {
         call::<Result<(), u8>>(pic, canister, "indexed_batch", 21, &(chunk, false))
@@ -645,12 +630,8 @@ async fn primary_page_lookahead() {
             for limit in [1_u8, 8, 16, 32] {
                 let mut after = None;
                 loop {
-                    let (rows, next, open, work): (
-                        Vec<(u64, ic_wire::ByteBuf)>,
-                        Option<u64>,
-                        u64,
-                        u64,
-                    ) = call(pic, id, "measured_primary_page", 251, &(after, limit)).await;
+                    let (rows, next, open, work): (Vec<(u64, ByteBuf)>, Option<u64>, u64, u64) =
+                        call(pic, id, "measured_primary_page", 251, &(after, limit)).await;
                     let first = after.unwrap_or(0) + 1;
                     let last = (first + u64::from(limit) - 1).min(24);
                     assert_eq!(rows.len() as u64, (first..=last).count() as u64);

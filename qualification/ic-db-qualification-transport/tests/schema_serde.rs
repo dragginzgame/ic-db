@@ -3,7 +3,7 @@
 use ic_db::design::prelude::*;
 
 use ic_db_cli::fixture_wire;
-use ic_wire::{Encoding, Limits};
+use ic_db_cli::fixture_wire::{Encoding, Limits};
 use serde::{Serialize, de::DeserializeOwned};
 
 const LIMITS: Limits = Limits {
@@ -17,7 +17,7 @@ fn encode<T: Serialize>(value: &T) -> Vec<u8> {
     fixture_wire::encode(value, Encoding::Payload, LIMITS).unwrap()
 }
 
-fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ic_wire::Error> {
+fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ic_db_cli::fixture_wire::Error> {
     fixture_wire::decode(bytes, Encoding::Payload, LIMITS)
 }
 
@@ -32,7 +32,7 @@ fn schema_reference_keeps_target_then_index_on_wire() {
 
 #[test]
 fn fixture_decoder_enforces_each_wire_budget() {
-    use ic_wire::LimitKind;
+    use ic_db_cli::fixture_wire::LimitKind;
     let bytes = encode(&Some("oak"));
     for (limits, kind) in [
         (Limits { bytes: 1, ..LIMITS }, LimitKind::Bytes),
@@ -48,7 +48,7 @@ fn fixture_decoder_enforces_each_wire_budget() {
     ] {
         assert_eq!(
             fixture_wire::decode::<Option<String>>(&bytes, Encoding::Payload, limits),
-            Err(ic_wire::Error::Limit(kind))
+            Err(ic_db_cli::fixture_wire::Error::Limit(kind))
         );
     }
 }

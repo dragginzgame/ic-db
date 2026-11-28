@@ -2,7 +2,7 @@
 
 use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::LIMITS;
-use ic_wire::{Direction, Encoding};
+use ic_db_qualification_transport::fixture_wire::{Direction, Encoding};
 use serde::{Serialize, de::DeserializeOwned};
 
 pub(crate) fn request<T: Serialize>(method: u64, value: &T) -> Vec<u8> {

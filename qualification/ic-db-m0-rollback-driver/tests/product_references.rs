@@ -1,11 +1,12 @@
 //! Cross-chunk migration integrity; literal row/index bytes remain independent.
 
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 mod wire_frame;
 use ic_db_m0_rollback_driver::instance;
 use std::collections::BTreeMap;
 
 type Reply = (Result<(u32, bool), u8>, u64, u64, [u64; 4]);
-type RawPage = (Vec<(Vec<u8>, ic_wire::ByteBuf)>, Option<Vec<u8>>);
+type RawPage = (Vec<(Vec<u8>, ByteBuf)>, Option<Vec<u8>>);
 type Entries = BTreeMap<Vec<u8>, Vec<u8>>;
 
 // Independently calculated logical-name handles. No product schema or codec imports.

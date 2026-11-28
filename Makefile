@@ -117,7 +117,7 @@ m2-sqlite-reference:
 
 m0-contracts:
 	cargo run --manifest-path qualification/Cargo.toml --locked -p ic-db-wire-schema-probe
-	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-wire-schema-probe --features inspection
+	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-wire-schema-probe
 	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-qualification-transport --test schema_serde
 	cargo test --manifest-path qualification/Cargo.toml --locked -p ic-db-m0-rollback-driver --test numeric_contract --test schema_identity -- --nocapture
 

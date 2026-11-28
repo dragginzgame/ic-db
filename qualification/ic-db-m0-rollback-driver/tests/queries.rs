@@ -1,6 +1,7 @@
 //! Fluent query pages remain bounded and resume across upgrades in real Wasm.
 
 use ic_db_m0_rollback_driver::instance;
+use ic_db_qualification_transport::fixture_wire::ByteBuf;
 use ic_db_qualification_transport::{ComparisonFilter, FilterComparison, RowFilters};
 mod wire_frame;
 
@@ -1417,13 +1418,7 @@ async fn sparse_fluent_pages_retry_and_reopen() {
             "replace_binary_object",
             wire_frame::request(
                 14,
-                &(
-                    (
-                        ic_wire::ByteBuf::from(vec![7; 1024]),
-                        None::<ic_wire::ByteBuf>,
-                    ),
-                    false,
-                ),
+                &((ByteBuf::from(vec![7; 1024]), None::<ByteBuf>), false),
             ),
         )
         .await

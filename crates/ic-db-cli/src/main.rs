@@ -7,6 +7,7 @@ mod terminal;
 #[cfg(test)]
 mod tests;
 
+use canic::wire::{Direction, Encoding};
 use clap::{CommandFactory, Parser, Subcommand};
 use ic_db_cli::fixture_wire;
 use ic_db_cli::host::{LIMITS, instance};
@@ -17,7 +18,6 @@ use ic_db_cli::{
 };
 use ic_host_text::{bordered_table, escape};
 use ic_testkit::pocket_ic;
-use ic_wire::{Direction, Encoding};
 
 use std::{
     io::{self, BufRead, IsTerminal, Write},

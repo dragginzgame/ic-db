@@ -1,44 +1,38 @@
 //! Downstream application payload and host inspection probe.
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+use canic::wire::{self, Encoding, Limits};
 use ic_db::design::prelude::*;
-#[cfg(feature = "inspection")]
-use ic_wire::typescript::Wire;
-#[cfg(all(test, feature = "inspection"))]
-use ic_wire::{Encoding, Limits, Message};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "inspection", derive(Wire))]
 struct UserAdminRequest {
     user_id: Ulid,
     action: Action,
 }
 
-#[enum_(wire, variant(name = "Suspend"), variant(name = "Allow"))]
+#[enum_(variant(name = "Suspend"), variant(name = "Allow"))]
 struct Action {}
 
-#[newtype(wire, item(prim = "Nat16"))]
+#[newtype(item(prim = "Nat16"))]
 struct Code {}
 
-#[list(wire, item(is = "Code"), max_items = 4)]
+#[list(item(is = "Code"), max_items = 4)]
 struct Codes {}
 
-#[set(wire, item(prim = "Nat8"), max_items = 4)]
+#[set(item(prim = "Nat8"), max_items = 4)]
 struct Roles {}
 
-#[map(wire, key(prim = "Nat8"), value(item(prim = "Nat16")), max_items = 4)]
+#[map(key(prim = "Nat8"), value(item(prim = "Nat16")), max_items = 4)]
 struct Scores {}
 
-#[record(
-    wire,
-    fields(
-        field(name = "scores", value(item(is = "Scores"))),
-        field(name = "roles", value(item(is = "Roles"))),
-        field(name = "codes", value(item(is = "Codes"))),
-        field(name = "wide", value(item(prim = "U256")))
-    )
-)]
+#[record(fields(
+    field(name = "scores", value(item(is = "Scores"))),
+    field(name = "roles", value(item(is = "Roles"))),
+    field(name = "codes", value(item(is = "Codes"))),
+    field(name = "wide", value(item(prim = "U256")))
+))]
 struct Profile {}
 
 #[canister]
@@ -47,13 +41,13 @@ struct Directory {}
 #[store(canister = Directory, key = "probe.profile.v1")]
 struct Profiles {}
 
-#[entity(wire, store = Profiles, pk(field = "id"), fields(
+#[entity(store = Profiles, pk(field = "id"), fields(
     field(name = "profile", value(item(is = "Profile"))),
     field(name = "id", value(item(prim = "Ulid")))
 ))]
 struct User {}
 
-#[cfg(all(test, feature = "inspection"))]
+#[cfg(test)]
 const LIMITS: Limits = Limits {
     bytes: 2048,
     allocation: 65536,
@@ -75,15 +69,6 @@ fn main() {
         };
         let expected = [bytes.as_slice(), &[tag]].concat();
         assert_eq!(payload(&request), expected);
-        #[cfg(all(test, feature = "inspection"))]
-        {
-            let message = ic_wire::encode(&request, Encoding::Payload, LIMITS).unwrap();
-            assert_eq!(message, [expected.as_slice(), &[0]].concat());
-            assert_eq!(
-                ic_wire::decode::<UserAdminRequest>(&message, Encoding::Payload, LIMITS).unwrap(),
-                request
-            );
-        }
         assert_eq!(
             postcard::from_bytes::<UserAdminRequest>(&expected).unwrap(),
             request
@@ -108,29 +93,32 @@ fn main() {
     assert_eq!(postcard::from_bytes::<User>(&expected).unwrap(), user);
 }
 
-#[cfg(all(test, feature = "inspection"))]
+#[cfg(test)]
 mod tests {
     use super::*;
-    use ic_wire::typescript::{
-        Method, PayloadLimits, SchemaLimits, SchemaRegistry, ValidatedRegistry,
-    };
+    use canic::wire::typescript::{Method, PayloadLimits, SchemaLimits, SchemaRegistry, Wire};
+
+    type CursorBytes = wire::Bytes<{ ic_db::QueryCursor::MAX_ENCODED_BYTES }>;
 
     #[derive(Serialize, Deserialize, Wire)]
+    #[wire(crate = "canic::wire")]
     struct PageRequest {
-        after: Option<ic_db::QueryCursor>,
+        after: Option<CursorBytes>,
     }
 
     #[derive(Serialize, Deserialize, Wire)]
+    #[wire(crate = "canic::wire")]
     struct PageReply {
-        id: ic_db::Id<User>,
-        next: Option<ic_db::QueryCursor>,
+        id: [u8; 16],
+        next: Option<CursorBytes>,
     }
 
     // Canic supplies the sparse root around a mounted method's Serde body.
-    #[derive(Serialize, Deserialize, ic_wire::WireSchema)]
+    #[derive(Serialize, Deserialize, wire::WireSchema)]
+    #[wire(crate = "canic::wire")]
     struct MountedPage {
-        id: ic_db::Id<User>,
-        after: Option<ic_db::QueryCursor>,
+        id: [u8; 16],
+        after: Option<CursorBytes>,
     }
 
     #[canic::query]
@@ -139,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn mounted_page_inspects_the_typed_id_and_bounded_cursor() {
+    fn mounted_page_inspects_the_fixed_key_and_bounded_cursor() {
         let methods =
             canic::inspection::methods(env!("CARGO_CRATE_NAME"), &Default::default()).unwrap();
         let method = &methods["mounted_page"];
@@ -179,7 +167,7 @@ mod tests {
 
     #[test]
     fn checked_principal_uses_the_principal_payload_and_rejects_anonymous() {
-        #[newtype(wire, item(prim = "Principal"), validate(non_anonymous))]
+        #[newtype(item(prim = "Principal"), validate(non_anonymous))]
         struct ProjectOwner {}
 
         for principal in [
@@ -240,21 +228,16 @@ mod tests {
                 allocation: 1 << 20,
                 ..LIMITS
             };
-            let encoded = ic_wire::encode(
-                &Message(Some(ic_wire::ByteBuf::from(bad))),
-                Encoding::Payload,
-                limits,
-            )
-            .unwrap();
-            assert!(
-                ic_wire::decode::<Message<Option<ic_wire::ByteBuf>>>(
-                    &encoded,
-                    Encoding::Payload,
-                    limits
-                )
-                .is_ok()
-            );
-            assert!(ic_wire::decode::<PageRequest>(&encoded, Encoding::Payload, limits).is_err());
+            let oversized = bad.len() > QueryCursor::MAX_ENCODED_BYTES;
+            let encoded =
+                wire::encode(&Some(wire::ByteBuf::from(bad)), Encoding::Payload, limits).unwrap();
+            let decoded = wire::decode::<PageRequest>(&encoded, Encoding::Payload, limits);
+            if oversized {
+                assert!(decoded.is_err());
+            } else {
+                let decoded = decoded.unwrap();
+                assert!(QueryCursor::from_bytes(decoded.after.unwrap().as_slice()).is_err());
+            }
         }
         let limits = PayloadLimits {
             bytes: 2048,
@@ -279,10 +262,6 @@ mod tests {
             request_limits: limits,
             response_limits: limits,
         };
-        let manifests = registry.api_manifests(&[("page", method)]).unwrap();
-        let manifest: serde_json::Value = serde_json::from_str(&manifests["page"]).unwrap();
-        assert_eq!(manifest["request"]["root"], "PageRequest");
-        assert_eq!(manifest["response"]["root"], "PageReply");
         let module = registry
             .method_module(&[method], "./runtime.ts", &Default::default(), |report| {
                 assert!(report.is_clean(), "{report}");
@@ -292,51 +271,54 @@ mod tests {
             method: 1,
             direction,
         };
-        let response = frame(ic_wire::Direction::Response);
-        let request = frame(ic_wire::Direction::Request);
+        let response = frame(wire::Direction::Response);
+        let request = frame(wire::Direction::Request);
         assert_eq!(
-            ic_wire::encode(&PageRequest { after: None }, request, LIMITS).unwrap(),
-            ic_wire::encode(&Message(None::<Vec<u8>>), request, LIMITS).unwrap()
+            wire::encode(&PageRequest { after: None }, request, LIMITS).unwrap(),
+            wire::encode(&None::<Vec<u8>>, request, LIMITS).unwrap()
         );
-        let byte_vector_reply = ic_wire::encode(
-            &Message((
-                id.to_bytes(),
-                Some(ic_wire::ByteBuf::from(cursor.to_bytes())),
-            )),
+        let byte_vector_reply = wire::encode(
+            &(id.to_bytes(), Some(wire::ByteBuf::from(cursor.to_bytes()))),
             response,
             LIMITS,
         )
         .unwrap();
-        let first_reply = ic_wire::encode(
+        let first_reply = wire::encode(
             &PageReply {
-                id: ic_db::Id::from_key(id),
-                next: Some(cursor.clone()),
+                id: id.to_bytes(),
+                next: Some(CursorBytes::new(cursor.to_bytes()).unwrap()),
             },
             response,
             LIMITS,
         )
         .unwrap();
         assert_eq!(first_reply, byte_vector_reply);
+        let received: PageReply = wire::decode(&first_reply, response, LIMITS).unwrap();
+        let key = ic_db::Id::<User>::from_key(Ulid::from_bytes(received.id));
+        assert_eq!(db.get::<User>(key).unwrap(), Some(first.rows[0].clone()));
         assert_eq!(first_reply.last(), Some(&0));
         assert!(
-            ic_wire::decode::<PageReply>(&first_reply[..first_reply.len() - 1], response, LIMITS)
+            wire::decode::<PageReply>(&first_reply[..first_reply.len() - 1], response, LIMITS)
                 .is_err()
         );
         let next_request = typescript_continue(&module, &first_reply);
         assert_eq!(
             next_request,
-            ic_wire::encode(
-                &Message(Some(ic_wire::ByteBuf::from(cursor.to_bytes()))),
+            wire::encode(
+                &Some(wire::ByteBuf::from(cursor.to_bytes())),
                 request,
                 LIMITS
             )
             .unwrap()
         );
-        let decoded: PageRequest = ic_wire::decode(&next_request, request, LIMITS).unwrap();
-        let second = query().after(&decoded.after.unwrap()).fetch().unwrap();
+        let decoded: PageRequest = wire::decode(&next_request, request, LIMITS).unwrap();
+        let second = query()
+            .after(&QueryCursor::from_bytes(decoded.after.unwrap().as_slice()).unwrap())
+            .fetch()
+            .unwrap();
         assert_eq!(second.rows[0].id, Ulid::from_u128(2));
         assert_eq!(second.rows.len(), 1);
-        assert!(ic_wire::decode::<PageRequest>(&[1, 50, 1], Encoding::Payload, LIMITS).is_err());
+        assert!(wire::decode::<PageRequest>(&[1, 50, 1], Encoding::Payload, LIMITS).is_err());
     }
 
     fn typescript_continue(module: &str, reply: &[u8]) -> Vec<u8> {
@@ -352,7 +334,7 @@ mod tests {
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
-        let input = serde_json::json!({"module":module, "runtime":ic_wire::typescript::RUNTIME, "reply":reply});
+        let input = serde_json::json!({"module":module, "runtime":wire::typescript::RUNTIME, "reply":reply});
         child
             .stdin
             .take()
@@ -393,88 +375,6 @@ mod tests {
             (-1.5_f64).to_le_bytes()
         );
     }
-
-    #[test]
-    fn scalar_schema_matches_its_binary_representation() {
-        fn layout<T: Wire + ?Sized>() -> String {
-            ValidatedRegistry::from_type::<T>("Value", SchemaLimits::default())
-                .unwrap()
-                .metadata_json()
-                .unwrap()
-        }
-        assert_eq!(
-            layout::<ic_db::QueryCursor>(),
-            layout::<ic_wire::Bytes<{ ic_db::QueryCursor::MAX_ENCODED_BYTES }>>()
-        );
-        assert_eq!(layout::<Code>(), layout::<u16>());
-        assert_eq!(layout::<Date>(), layout::<i32>());
-        assert_eq!(layout::<Timestamp>(), layout::<i64>());
-        assert_eq!(layout::<Duration>(), layout::<u64>());
-        assert_eq!(layout::<Decimal>(), layout::<str>());
-        assert_eq!(layout::<U256>(), layout::<str>());
-        assert_eq!(layout::<Float32>(), layout::<ic_wire::FiniteF32>());
-        assert_eq!(layout::<Float64>(), layout::<ic_wire::FiniteF64>());
-        assert_eq!(layout::<Blob>(), layout::<Vec<u8>>());
-        assert_eq!(layout::<Subaccount>(), layout::<[u8; 32]>());
-        let mut named = SchemaRegistry::new(SchemaLimits::default()).unwrap();
-        named.register::<UserAdminRequest>("Request").unwrap();
-        named.register::<User>("User").unwrap();
-        named.register::<Account>("Account").unwrap();
-        named.finish().unwrap();
-    }
-
-    #[test]
-    fn inspection_uses_the_serde_field_order_and_enum_tags() {
-        let registry =
-            ValidatedRegistry::from_type::<UserAdminRequest>("Request", SchemaLimits::default())
-                .unwrap();
-        let limits = PayloadLimits {
-            bytes: 2048,
-            nodes: 256,
-            depth: 16,
-        };
-        let method = Method {
-            export: "userAdmin",
-            id: 1,
-            request: "Request",
-            response: "Request",
-            request_limits: limits,
-            response_limits: limits,
-        };
-        let manifests = registry.api_manifests(&[("user_admin", method)]).unwrap();
-        let manifest: serde_json::Value = serde_json::from_str(&manifests["user_admin"]).unwrap();
-        let request: serde_json::Value =
-            serde_json::from_str(&registry.metadata_json().unwrap()).unwrap();
-        assert_eq!(
-            request["Request"]["fields"][0],
-            serde_json::json!({"name":"user_id","value":{"k":"array","max":16,"item":{"k":"u","bits":8}}})
-        );
-        let variants = &request["Request"]["fields"][1]["value"]["variants"];
-        assert_eq!(variants[0]["name"], "Allow");
-        assert_eq!(variants[0]["id"], 0);
-        assert_eq!(variants[1]["id"], 1);
-        assert_eq!(manifest["endpoint"], "user_admin");
-        assert_eq!(manifest["schemas"]["Request"], request["Request"]);
-        let registry =
-            ValidatedRegistry::from_type::<User>("User", SchemaLimits::default()).unwrap();
-        let metadata: serde_json::Value =
-            serde_json::from_str(&registry.metadata_json().unwrap()).unwrap();
-        assert_eq!(metadata["User"]["k"], "record");
-        assert_eq!(metadata["User"]["fields"][0]["value"]["k"], "record");
-        let fields = &metadata["User"]["fields"];
-        assert_eq!(fields[0]["name"], "profile");
-        assert_eq!(fields[1]["name"], "id");
-        let members = &fields[0]["value"]["fields"];
-        assert_eq!(members[0]["name"], "codes");
-        assert_eq!(
-            members[1],
-            serde_json::json!({"name":"roles","value":{"k":"list","item":{"k":"u","bits":8}}})
-        );
-        assert_eq!(
-            members[2],
-            serde_json::json!({"name":"scores","value":{"k":"list","item":{"k":"tuple","items":[{"k":"u","bits":8},{"k":"u","bits":16}]}}})
-        );
-    }
 }
 
 mod checked_text {
@@ -482,7 +382,6 @@ mod checked_text {
     use ic_db::design::prelude::*;
 
     #[newtype(
-        wire,
         item(prim = "Text", max_bytes = 200),
         validate(non_blank, max_chars = 50)
     )]
