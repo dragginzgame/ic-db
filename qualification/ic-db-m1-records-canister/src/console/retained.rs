@@ -353,12 +353,7 @@ fn display_summary<T>(
     render: fn(T) -> Vec<String>,
 ) -> Response {
     display(step, |p| {
-        let (columns, rows) = super::summary_table(p.rows, key, render);
-        DisplayPage {
-            columns,
-            rows,
-            next: p.next.map(|c| c.to_bytes()),
-        }
+        group_display(super::summary_table(p.rows, key, render), p.next)
     })
 }
 
@@ -370,14 +365,19 @@ fn scalar(label: &str, value: Option<String>) -> DisplayPage {
     }
 }
 
-fn counts<K>(page: GroupPage<GroupCount<K>>, column: &str, key: fn(K) -> String) -> DisplayPage {
-    let (columns, rows) = super::count_table(page.rows, column, key);
-
+fn group_display(
+    (columns, rows): (Vec<String>, Vec<Vec<String>>),
+    next: Option<GroupCursor>,
+) -> DisplayPage {
     DisplayPage {
         columns,
         rows,
-        next: page.next.map(|c| c.to_bytes()),
+        next: next.map(|cursor| cursor.to_bytes()),
     }
+}
+
+fn counts<K>(page: GroupPage<GroupCount<K>>, column: &str, key: fn(K) -> String) -> DisplayPage {
+    group_display(super::count_table(page.rows, column, key), page.next)
 }
 
 fn values<K, R>(
@@ -386,13 +386,10 @@ fn values<K, R>(
     key: fn(K) -> String,
     render: fn(R) -> String,
 ) -> DisplayPage {
-    let (columns, rows) = super::value_table(page.rows, &columns, key, render);
-
-    DisplayPage {
-        columns,
-        rows,
-        next: page.next.map(|c| c.to_bytes()),
-    }
+    group_display(
+        super::value_table(page.rows, &columns, key, render),
+        page.next,
+    )
 }
 
 pub(super) fn resume_at(request: &RetainedResume, now: Timestamp) -> Result<Response, String> {
@@ -524,14 +521,13 @@ impl EntrySelector {
             Self::DistinctAmount => query
                 .resume_distinct::<AmountOnly>(jobs, handle, sequence, now, after)
                 .map(|s| {
-                    display(s, |p| DisplayPage {
-                        columns: vec!["amount".into()],
-                        rows: p
+                    display(s, |p| {
+                        let rows = p
                             .rows
                             .into_iter()
                             .map(|r| vec![r.amount.to_string()])
-                            .collect(),
-                        next: p.next.map(|c| c.to_bytes()),
+                            .collect();
+                        group_display((vec!["amount".into()], rows), p.next)
                     })
                 }),
             Self::DistinctCountAmount => query

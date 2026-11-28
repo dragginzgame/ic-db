@@ -3,6 +3,7 @@
 mod artifact;
 mod wire_call;
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_db_qualification_transport::RowFilters;
 use ic_wire::{Direction, Encoding};
@@ -46,7 +47,7 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
             canister,
             canister,
             "decimal_batch",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(rows, false),
                 Encoding::Frame {
                     method: 67,
@@ -59,7 +60,7 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
         .await
         .unwrap();
     assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
+        fixture_wire::decode::<Result<(), u8>>(
             &reply,
             Encoding::Frame {
                 method: 67,
@@ -95,7 +96,7 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
                 canister,
                 canister,
                 "query",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &request,
                     Encoding::Frame {
                         method: 3,
@@ -108,7 +109,7 @@ async fn decimal_sorting_and_distinct_preserve_exact_values_across_upgrade() {
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Page, String>>(
+        fixture_wire::decode::<Result<Page, String>>(
             &reply,
             Encoding::Frame {
                 method: 3,
@@ -240,7 +241,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
                     canister,
                     canister,
                     "measured_query",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &request,
                         Encoding::Frame {
                             method: 147,
@@ -255,7 +256,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
             let cycles = before
                 .checked_sub(pic.cycle_balance(canister).await)
                 .unwrap();
-            let (result, instructions): (Result<Page, String>, u64) = ic_wire::decode(
+            let (result, instructions): (Result<Page, String>, u64) = fixture_wire::decode(
                 &reply,
                 Encoding::Frame {
                     method: 147,
@@ -279,7 +280,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
                 canister,
                 canister,
                 "query",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &request,
                     Encoding::Frame {
                         method: 3,
@@ -292,7 +293,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Page, String>>(
+        fixture_wire::decode::<Result<Page, String>>(
             &reply,
             Encoding::Frame {
                 method: 3,
@@ -469,7 +470,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
                 canister,
                 canister,
                 "write",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(id, category, amount, mode),
                     Encoding::Frame {
                         method: 4,
@@ -482,7 +483,7 @@ async fn sorting_reads_complete_input_and_refuses_partial_results_across_upgrade
             .await
             .unwrap();
         assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
+            fixture_wire::decode::<Result<(), u8>>(
                 &reply,
                 Encoding::Frame {
                     method: 4,

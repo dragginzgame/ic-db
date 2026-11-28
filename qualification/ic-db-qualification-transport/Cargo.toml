@@ -13,7 +13,7 @@ ignored = ["toko-tooling"]
 category = "tests"
 
 [dependencies]
-ic-db-cli.workspace = true
+ic-db-cli = { workspace = true, features = ["fixture-wire"] }
 ic-platform-runtime = { workspace = true, features = ["call-ic0", "system-raw"] }
 ic-wire.workspace = true
 serde = { workspace = true, features = ["derive"] }

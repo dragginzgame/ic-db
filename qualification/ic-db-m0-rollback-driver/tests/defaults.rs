@@ -1,5 +1,6 @@
 //! Installed omission/default behavior, index maintenance, rollback and unchanged upgrade.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -20,7 +21,7 @@ async fn literal_defaults_remain_insert_only_across_real_message_boundaries() {
             canister,
             canister,
             "default_write",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(id, mode, trap),
                 Encoding::Frame {
                     method: 80,
@@ -33,7 +34,7 @@ async fn literal_defaults_remain_insert_only_across_real_message_boundaries() {
         .await
     };
     let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<Row, u8>>(
+        fixture_wire::decode::<Result<Row, u8>>(
             &bytes,
             Encoding::Frame {
                 method: 80,
@@ -49,7 +50,7 @@ async fn literal_defaults_remain_insert_only_across_real_message_boundaries() {
                 canister,
                 canister,
                 "default_rows",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(),
                     Encoding::Frame {
                         method: 81,
@@ -62,7 +63,7 @@ async fn literal_defaults_remain_insert_only_across_real_message_boundaries() {
             .await
             .unwrap();
 
-        ic_wire::decode::<State>(
+        fixture_wire::decode::<State>(
             &bytes,
             Encoding::Frame {
                 method: 81,

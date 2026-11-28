@@ -1006,12 +1006,13 @@ such as `inspection = ["ic-db/wire"]`. Its storage-only consumers can leave it
 disabled, including when the declarations carry the `wire` marker. Its build
 script can use just `ic-db/build`. Include Serde as a direct dependency wherever
 the marked declarations compile, including build dependencies for a shared schema. Ordinary
-application DTOs derive `ic_wire::Wire` with IC Wire 0.32’s `derive` feature.
-Plain derives describe positional Serde payloads. Enabling `ic-db/wire` supplies
-TypeScript inspection and platform type support. The host can enable IC Wire’s
-`api-manifest` feature for offline inspection. An application using
-`#[wire(sparse)]` on its own message can embed a positional `QueryCursor` and
-encode or decode that message with `ic_wire::evolution`.
+application request and reply structs derive `ic_wire::Wire` with IC Wire 0.33.
+Each message carries a sparse root extension block. Regenerate clients and upgrade
+both peers together when moving from 0.32. For a scalar or enum root, wrap the
+value in `ic_wire::Message<T>`. Marked database types expose their positional
+Serde layout as fields inside these messages. Enabling `ic-db/wire` supplies
+TypeScript inspection and platform type support. Enable IC Wire’s `api-manifest`
+feature on the host for offline inspection.
 
 ```rust
 use ic_db::design::prelude::*;

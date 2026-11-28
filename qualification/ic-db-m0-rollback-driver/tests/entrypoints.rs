@@ -1,5 +1,6 @@
 //! Standalone installed hooks: raw refusals and reply failures across IC boundaries.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{ByteBuf, Direction, Encoding};
@@ -19,7 +20,7 @@ async fn admission_and_decode_refuse_before_dispatch() {
     pic.add_cycles(canister, 2_000_000_000_000).await;
     pic.install_canister(canister, wasm(), vec![], None).await;
     let before = pic.get_stable_memory(canister).await;
-    let valid = ic_wire::encode(
+    let valid = fixture_wire::encode(
         &(0_u8, 7_u64, 11_u64),
         Encoding::Frame {
             method: 1,
@@ -28,7 +29,7 @@ async fn admission_and_decode_refuse_before_dispatch() {
         LIMITS,
     )
     .unwrap();
-    let wrong_id = ic_wire::encode(
+    let wrong_id = fixture_wire::encode(
         &(0_u8, 7_u64, 11_u64),
         Encoding::Frame {
             method: 2,
@@ -37,7 +38,7 @@ async fn admission_and_decode_refuse_before_dispatch() {
         LIMITS,
     )
     .unwrap();
-    let wrong_direction = ic_wire::encode(
+    let wrong_direction = fixture_wire::encode(
         &(0_u8, 7_u64, 11_u64),
         Encoding::Frame {
             method: 1,
@@ -64,7 +65,7 @@ async fn admission_and_decode_refuse_before_dispatch() {
         let expected = if bytes.len() > LIMITS.bytes {
             "Wire request exceeds byte allowance".to_owned()
         } else {
-            ic_wire::decode::<(u8, u64, u64)>(
+            fixture_wire::decode::<(u8, u64, u64)>(
                 &bytes,
                 Encoding::Frame {
                     method: 1,
@@ -104,7 +105,7 @@ async fn admission_and_decode_refuse_before_dispatch() {
         .await
         .unwrap();
     assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
+        fixture_wire::decode::<Result<(), u8>>(
             &reply,
             Encoding::Frame {
                 method: 1,
@@ -120,7 +121,7 @@ async fn admission_and_decode_refuse_before_dispatch() {
             canister,
             canister,
             "inspect",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(),
                 Encoding::Frame {
                     method: 2,
@@ -132,7 +133,7 @@ async fn admission_and_decode_refuse_before_dispatch() {
         )
         .await
         .unwrap();
-    let snapshot: Snapshot = ic_wire::decode(
+    let snapshot: Snapshot = fixture_wire::decode(
         &reply,
         Encoding::Frame {
             method: 2,
@@ -164,7 +165,7 @@ async fn reply_failure_rolls_back_only_the_current_execution() {
                     canister,
                     canister,
                     method,
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &oversized,
                         Encoding::Frame {
                             method: id,
@@ -176,7 +177,7 @@ async fn reply_failure_rolls_back_only_the_current_execution() {
                 )
                 .await;
             if oversized {
-                let expected = ic_wire::encode(
+                let expected = fixture_wire::encode(
                     &ByteBuf::from(vec![7; 65_536]),
                     Encoding::Frame {
                         method: id,
@@ -197,7 +198,7 @@ async fn reply_failure_rolls_back_only_the_current_execution() {
                 }
             } else {
                 assert_eq!(
-                    ic_wire::decode::<ByteBuf>(
+                    fixture_wire::decode::<ByteBuf>(
                         &result.unwrap(),
                         Encoding::Frame {
                             method: id,
@@ -220,7 +221,7 @@ async fn reply_failure_rolls_back_only_the_current_execution() {
                     canister,
                     canister,
                     "inspect",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &(),
                         Encoding::Frame {
                             method: 2,
@@ -232,7 +233,7 @@ async fn reply_failure_rolls_back_only_the_current_execution() {
                 )
                 .await
                 .unwrap();
-            let snapshot: Snapshot = ic_wire::decode(
+            let snapshot: Snapshot = fixture_wire::decode(
                 &reply,
                 Encoding::Frame {
                     method: 2,

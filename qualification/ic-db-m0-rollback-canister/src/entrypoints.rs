@@ -1,6 +1,7 @@
 //! Standalone Platform hooks with bounded Wire codecs, without Canic.
 //! Reply failure probes distinguish the current message from an earlier call.
 
+use crate::transport::fixture_wire;
 use ic_platform_runtime::call::{Call, Outcome, Wait};
 use ic_wire::{ByteBuf, Direction, Encoding};
 
@@ -61,10 +62,10 @@ async fn endpoint_async(oversized: bool) -> ByteBuf {
     let limits = ic_wire::Limits {
         bytes: 64,
         allocation: 1024,
-        nodes: 8,
+        nodes: 32,
         depth: 4,
     };
-    let request = ic_wire::encode(
+    let request = fixture_wire::encode(
         &(),
         Encoding::Frame {
             method: 9,
@@ -83,7 +84,7 @@ async fn endpoint_async(oversized: bool) -> ByteBuf {
     .await
     .unwrap();
     assert_eq!(
-        ic_wire::decode::<u8>(
+        fixture_wire::decode::<u8>(
             match response.outcome() {
                 Outcome::Reply(bytes) => bytes,
                 other => panic!("unexpected callback: {other:?}"),

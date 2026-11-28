@@ -1,5 +1,6 @@
 //! Actual IC issuance consumption, message rollback and explicit upgrade restoration.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -20,7 +21,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
             canister,
             canister,
             "issue_key",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(time, [0_u8; 10], value, mode),
                 Encoding::Frame {
                     method: 77,
@@ -38,7 +39,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
                 canister,
                 canister,
                 "last_issued_key",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(),
                     Encoding::Frame {
                         method: 78,
@@ -51,7 +52,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
             .await
             .unwrap();
 
-        ic_wire::decode::<Option<[u8; 16]>>(
+        fixture_wire::decode::<Option<[u8; 16]>>(
             &reply,
             Encoding::Frame {
                 method: 78,
@@ -62,7 +63,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
         .unwrap()
     };
     let result = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<[u8; 16], u8>>(
+        fixture_wire::decode::<Result<[u8; 16], u8>>(
             &bytes,
             Encoding::Frame {
                 method: 77,
@@ -117,7 +118,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
             canister,
             canister,
             "restore_issuer",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &checkpoint,
                 Encoding::Frame {
                     method: 79,
@@ -130,7 +131,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
         .await
         .unwrap();
     assert!(
-        ic_wire::decode::<bool>(
+        fixture_wire::decode::<bool>(
             &reply,
             Encoding::Frame {
                 method: 79,
@@ -151,7 +152,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
             canister,
             canister,
             "key_page",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(None::<[u8; 16]>, 10_u8),
                 Encoding::Frame {
                     method: 71,
@@ -163,7 +164,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
         )
         .await
         .unwrap();
-    let page: Page = ic_wire::decode(
+    let page: Page = fixture_wire::decode(
         &reply,
         Encoding::Frame {
             method: 71,
@@ -182,7 +183,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
             canister,
             canister,
             "key_lookup",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(resumed, 3_u64),
                 Encoding::Frame {
                     method: 72,
@@ -194,7 +195,7 @@ async fn issued_keys_follow_message_boundaries_and_explicit_restore() {
         )
         .await
         .unwrap();
-    let lookup: (Option<Row>, Vec<Row>) = ic_wire::decode(
+    let lookup: (Option<Row>, Vec<Row>) = fixture_wire::decode(
         &reply,
         Encoding::Frame {
             method: 72,

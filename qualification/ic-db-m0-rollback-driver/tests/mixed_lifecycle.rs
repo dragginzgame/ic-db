@@ -4,6 +4,7 @@
 mod artifact;
 mod wire_frame;
 
+use canic::method::wire as canic_wire;
 use ic_db_m0_rollback_driver::instance;
 use ic_testkit::pocket_ic::{CanisterId, RejectResponse, nonblocking::PocketIc};
 use serde::{Serialize, de::DeserializeOwned};
@@ -138,34 +139,27 @@ impl Model {
         }
     }
 }
-// Canic owns the endpoint budgets. The external caller uses its own Wire version.
-const APPLICATION_LIMITS: ic_wire::Limits = ic_wire::Limits {
-    bytes: canic::db::RPC_LIMITS.bytes,
-    allocation: canic::db::RPC_LIMITS.allocation,
-    nodes: canic::db::RPC_LIMITS.nodes,
-    depth: canic::db::RPC_LIMITS.depth,
-};
 
 fn application_request<T: Serialize>(method: u64, value: &T) -> Vec<u8> {
-    ic_wire::encode(
+    canic_wire::encode(
         value,
-        ic_wire::Encoding::Frame {
+        canic_wire::Encoding::Frame {
             method,
-            direction: ic_wire::Direction::Request,
+            direction: canic_wire::Direction::Request,
         },
-        APPLICATION_LIMITS,
+        canic::db::RPC_LIMITS,
     )
     .unwrap()
 }
 
 fn application_reply<T: DeserializeOwned>(method: u64, bytes: &[u8]) -> T {
-    ic_wire::decode(
+    canic_wire::decode(
         bytes,
-        ic_wire::Encoding::Frame {
+        canic_wire::Encoding::Frame {
             method,
-            direction: ic_wire::Direction::Response,
+            direction: canic_wire::Direction::Response,
         },
-        APPLICATION_LIMITS,
+        canic::db::RPC_LIMITS,
     )
     .unwrap()
 }

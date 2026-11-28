@@ -2,6 +2,7 @@
 
 mod envelope_support;
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
@@ -27,7 +28,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
                 canister,
                 canister,
                 "envelope_write",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(mode, count, generation, oversized, trap),
                     Encoding::Frame {
                         method: 88,
@@ -45,7 +46,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
         (reply, cycles)
     };
     let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<(Result<(), u8>, u64)>(
+        fixture_wire::decode::<(Result<(), u8>, u64)>(
             &bytes,
             Encoding::Frame {
                 method: 88,
@@ -61,7 +62,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
                 canister,
                 canister,
                 "envelope_read",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(index, generation),
                     Encoding::Frame {
                         method: 89,
@@ -74,7 +75,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
             .await
             .unwrap();
 
-        ic_wire::decode::<Read>(
+        fixture_wire::decode::<Read>(
             &bytes,
             Encoding::Frame {
                 method: 89,
@@ -94,7 +95,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
                         canister,
                         canister,
                         "envelope_raw",
-                        ic_wire::encode(
+                        fixture_wire::encode(
                             &(tag, &after),
                             Encoding::Frame {
                                 method: 90,
@@ -106,7 +107,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
                     )
                     .await
                     .unwrap();
-                let entries: RawPage = ic_wire::decode(
+                let entries: RawPage = fixture_wire::decode(
                     &bytes,
                     Encoding::Frame {
                         method: 90,
@@ -147,7 +148,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
             canister,
             canister,
             "envelope_comparison_write",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(0_u8, 0_u8, 61_u16),
                 Encoding::Frame {
                     method: 93,
@@ -159,7 +160,7 @@ async fn maximum_rows_batch_and_fanout_complete_or_refuse_atomically() {
         )
         .await
         .unwrap();
-    let (result, _): (Result<(), u16>, u64) = ic_wire::decode(
+    let (result, _): (Result<(), u16>, u64) = fixture_wire::decode(
         &bytes,
         Encoding::Frame {
             method: 93,

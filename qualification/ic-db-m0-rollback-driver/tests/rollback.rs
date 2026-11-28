@@ -1,5 +1,6 @@
 //! Actual Wasm rollback checks; raw stable bytes provide an oracle independent of row lookup.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver as support;
 use ic_wire::{Direction, Encoding};
 
@@ -20,7 +21,7 @@ async fn message_rollback() {
         pic.install_canister(canister, wasm.clone(), vec![], None)
             .await;
         let before = pic.get_stable_memory(canister).await;
-        let request = ic_wire::encode(
+        let request = fixture_wire::encode(
             &(mode, 7_u64, 11_u64),
             Encoding::Frame {
                 method: 1,
@@ -44,7 +45,7 @@ async fn message_rollback() {
                 "mode {mode}: raw backing, including allocator controls, must revert"
             );
         } else {
-            let result: Result<(), u8> = ic_wire::decode(
+            let result: Result<(), u8> = fixture_wire::decode(
                 &response.unwrap(),
                 Encoding::Frame {
                     method: 1,
@@ -74,7 +75,7 @@ async fn message_rollback() {
                 canister,
                 canister,
                 "inspect",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(),
                     Encoding::Frame {
                         method: 2,
@@ -86,7 +87,7 @@ async fn message_rollback() {
             )
             .await
             .unwrap();
-        let snapshot: Snapshot = ic_wire::decode(
+        let snapshot: Snapshot = fixture_wire::decode(
             &reply,
             Encoding::Frame {
                 method: 2,
@@ -124,7 +125,7 @@ async fn message_rollback() {
         );
         if mode == 0 {
             // Uniqueness refusal must not change existing data or allocation controls.
-            let duplicate = ic_wire::encode(
+            let duplicate = fixture_wire::encode(
                 &(0_u8, 8_u64, 11_u64),
                 Encoding::Frame {
                     method: 1,
@@ -138,7 +139,7 @@ async fn message_rollback() {
                 .await
                 .unwrap();
             assert_eq!(
-                ic_wire::decode::<Result<(), u8>>(
+                fixture_wire::decode::<Result<(), u8>>(
                     &reply,
                     Encoding::Frame {
                         method: 1,
@@ -158,7 +159,7 @@ async fn message_rollback() {
                     canister,
                     canister,
                     "inspect",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &(),
                         Encoding::Frame {
                             method: 2,
@@ -171,7 +172,7 @@ async fn message_rollback() {
                 .await
                 .unwrap();
             assert_eq!(
-                ic_wire::decode::<Snapshot>(
+                fixture_wire::decode::<Snapshot>(
                     &reply,
                     Encoding::Frame {
                         method: 2,

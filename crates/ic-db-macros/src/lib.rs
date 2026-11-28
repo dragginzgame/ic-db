@@ -192,8 +192,8 @@ fn schema_attrs(attrs: &[syn::Attribute], wire: bool) -> syn::Result<Tokens> {
 
     let projection = wire.then(|| {
         quote!(
-            #[derive(::ic_db::__private::Wire)]
-            #[wire(fixed, crate = "::ic_db::__private::ic_wire")]
+            #[derive(::ic_db::__private::WireSchema)]
+            #[wire(crate = "::ic_db::__private::ic_wire")]
         )
     });
     Ok(quote!(#ser #de #projection #(#attrs)* #path))

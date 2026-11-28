@@ -1,5 +1,6 @@
 //! Failures inside the delivered commit path, using the real IC rollback boundary.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
@@ -24,7 +25,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 canister,
                 canister,
                 "fault_status",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(),
                     Encoding::Frame {
                         method: 240,
@@ -37,7 +38,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
             .await
             .unwrap();
 
-        ic_wire::decode::<Status>(
+        fixture_wire::decode::<Status>(
             &reply,
             Encoding::Frame {
                 method: 240,
@@ -53,7 +54,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 canister,
                 canister,
                 "category",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &category,
                     Encoding::Frame {
                         method: 5,
@@ -66,7 +67,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
             .await
             .unwrap();
 
-        ic_wire::decode::<Vec<(u64, u64)>>(
+        fixture_wire::decode::<Vec<(u64, u64)>>(
             &reply,
             Encoding::Frame {
                 method: 5,
@@ -81,7 +82,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
             canister,
             canister,
             "fault_batch",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(first, stop_after, deny_growth, exhaust),
                 Encoding::Frame {
                     method: 6,
@@ -102,7 +103,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 canister,
                 canister,
                 "document_reference",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &1_u64,
                     Encoding::Frame {
                         method: 9,
@@ -115,7 +116,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
             .await
             .unwrap();
 
-        ic_wire::decode::<Option<u64>>(
+        fixture_wire::decode::<Option<u64>>(
             &reply,
             Encoding::Frame {
                 method: 9,
@@ -167,7 +168,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 assert!(category(9).await.is_empty());
             }
             Ok(reply) => {
-                let (writes, grows): (u64, u64) = ic_wire::decode(
+                let (writes, grows): (u64, u64) = fixture_wire::decode(
                     &reply,
                     Encoding::Frame {
                         method: 6,
@@ -211,7 +212,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
 
         match batch(first, 0, true, false).await {
             Ok(reply) => {
-                let (_, grows): (u64, u64) = ic_wire::decode(
+                let (_, grows): (u64, u64) = fixture_wire::decode(
                     &reply,
                     Encoding::Frame {
                         method: 6,
@@ -240,7 +241,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
                 let reply = batch(first, 0, false, false)
                     .await
                     .expect("same batch must complete when growth is allowed");
-                let (writes, grows): (u64, u64) = ic_wire::decode(
+                let (writes, grows): (u64, u64) = fixture_wire::decode(
                     &reply,
                     Encoding::Frame {
                         method: 6,
@@ -264,7 +265,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
                         canister,
                         canister,
                         "fluent_query",
-                        ic_wire::encode(
+                        fixture_wire::encode(
                             &(
                                 None::<Vec<u8>>,
                                 true,
@@ -285,7 +286,7 @@ async fn backing_writes_and_growth_failures_roll_back() {
                     .await
                     .unwrap();
                 type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
-                let page = ic_wire::decode::<Result<Page, u8>>(
+                let page = fixture_wire::decode::<Result<Page, u8>>(
                     &reply,
                     Encoding::Frame {
                         method: 95,

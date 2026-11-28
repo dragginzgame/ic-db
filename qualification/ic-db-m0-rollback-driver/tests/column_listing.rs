@@ -1,6 +1,7 @@
 //! Compare four installed projection shapes with the same bounded SQLite listing.
 mod artifact;
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance, upgrade_stopped};
 use ic_testkit::pocket_ic::{CanisterId, RejectResponse, nonblocking::PocketIc};
 use ic_wire::{Direction, Encoding};
@@ -22,11 +23,11 @@ async fn listing(
         direction,
     };
     let request =
-        ic_wire::encode(&(mode, sparse, cursor), frame(Direction::Request), LIMITS).unwrap();
+        fixture_wire::encode(&(mode, sparse, cursor), frame(Direction::Request), LIMITS).unwrap();
     let bytes = pic
         .query_call(canister, canister, "listing", request)
         .await?;
-    Ok(ic_wire::decode(&bytes, frame(Direction::Response), LIMITS).unwrap())
+    Ok(fixture_wire::decode(&bytes, frame(Direction::Response), LIMITS).unwrap())
 }
 
 #[derive(Debug, Default)]

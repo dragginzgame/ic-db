@@ -1,7 +1,6 @@
 //! Real product records in Wasm, with stable backing bytes as the rollback oracle.
 
-use ic_db_m0_rollback_driver::{LIMITS, instance};
-use ic_wire::{Direction, Encoding};
+use ic_db_m0_rollback_driver::instance;
 
 mod wire_frame;
 
@@ -41,27 +40,11 @@ async fn console_counts_preserve_backing_and_reopen() {
                     canister,
                     canister,
                     "cardinality",
-                    ic_wire::encode(
-                        &entity,
-                        Encoding::Frame {
-                            method: 148,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(148, &entity),
                 )
                 .await
                 .unwrap();
-            let actual = ic_wire::decode::<Result<u64, String>>(
-                &reply,
-                Encoding::Frame {
-                    method: 148,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap();
+            let actual = wire_frame::response::<Result<u64, String>>(148, &reply);
             match expected {
                 Some(count) => assert_eq!(actual, Ok(count)),
                 None => assert!(actual.unwrap_err().contains("Unknown entity")),
@@ -87,28 +70,12 @@ async fn references_follow_final_batch_state_in_wasm() {
                 canister,
                 canister,
                 "document_reference",
-                ic_wire::encode(
-                    &id,
-                    Encoding::Frame {
-                        method: 9,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(9, &id),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Option<u64>>(
-            &reply,
-            Encoding::Frame {
-                method: 9,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Option<u64>>(9, &reply)
     };
     let batch = async |mode: u8| {
         let reply = pic
@@ -116,28 +83,12 @@ async fn references_follow_final_batch_state_in_wasm() {
                 canister,
                 canister,
                 "reference_batch",
-                ic_wire::encode(
-                    &mode,
-                    Encoding::Frame {
-                        method: 10,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(10, &mode),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 10,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<(), u8>>(10, &reply)
     };
     let before = pic.get_stable_memory(canister).await;
     assert_eq!(batch(0).await, Err(1)); // missing target
@@ -177,15 +128,7 @@ async fn product_records_and_message_boundary() {
             canister,
             canister,
             "fault_batch",
-            ic_wire::encode(
-                &(0_u64, 1_u64, false, false),
-                Encoding::Frame {
-                    method: 6,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(6, &(0_u64, 1_u64, false, false)),
         )
         .await
         .expect_err("normal host must exclude fault endpoint");
@@ -195,32 +138,11 @@ async fn product_records_and_message_boundary() {
     );
     let status = async || {
         let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "inspect",
-                ic_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 1,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
+            .query_call(canister, canister, "inspect", wire_frame::request(1, &()))
             .await
             .unwrap();
 
-        ic_wire::decode::<Status>(
-            &reply,
-            Encoding::Frame {
-                method: 1,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Status>(1, &reply)
     };
     let page = async |after: Option<Vec<u8>>, limit: u32, min: u64| {
         let reply = pic
@@ -228,28 +150,15 @@ async fn product_records_and_message_boundary() {
                 canister,
                 canister,
                 "fluent_query",
-                ic_wire::encode(
+                wire_frame::request(
+                    95,
                     &(after, false, None::<u64>, min, limit, limit, 4096_u32),
-                    Encoding::Frame {
-                        method: 95,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                ),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Page, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 95,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<Page, u8>>(95, &reply)
     };
     let category = async |category: u64| {
         let reply = pic
@@ -257,43 +166,19 @@ async fn product_records_and_message_boundary() {
                 canister,
                 canister,
                 "category",
-                ic_wire::encode(
-                    &category,
-                    Encoding::Frame {
-                        method: 5,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(5, &category),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Vec<(u64, u64)>>(
-            &reply,
-            Encoding::Frame {
-                method: 5,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Vec<(u64, u64)>>(5, &reply)
     };
     let write = async |id: u64, category: u64, amount: u64, mode: u8| {
         pic.update_call(
             canister,
             canister,
             "write",
-            ic_wire::encode(
-                &(id, category, amount, mode),
-                Encoding::Frame {
-                    method: 4,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(4, &(id, category, amount, mode)),
         )
         .await
     };
@@ -310,15 +195,7 @@ async fn product_records_and_message_boundary() {
             canister,
             canister,
             "schema",
-            ic_wire::encode(
-                &None::<String>,
-                Encoding::Frame {
-                    method: 2,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(2, &None::<String>),
         )
         .await
         .unwrap();
@@ -327,15 +204,8 @@ async fn product_records_and_message_boundary() {
     type IndexView = (String, Vec<String>, bool, bool);
     type EntityView = (String, u32, String, Vec<FieldView>, Vec<IndexView>);
     type TypeView = (String, String, Vec<(String, String, bool, String)>);
-    let (admitted, entities, types): (Status, Vec<EntityView>, Vec<TypeView>) = ic_wire::decode(
-        &reply,
-        Encoding::Frame {
-            method: 2,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap();
+    let (admitted, entities, types): (Status, Vec<EntityView>, Vec<TypeView>) =
+        wire_frame::response(2, &reply);
     assert_eq!(admitted, original);
     let entity = |name: &str| entities.iter().find(|entity| entity.0 == name).unwrap();
     assert_eq!(entities.len(), 31);
@@ -587,18 +457,7 @@ async fn product_records_and_message_boundary() {
 
     let before = pic.get_stable_memory(canister).await;
     let reply = write(1, 9, 900, 1).await.unwrap(); // duplicate insert: ordinary refusal
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 4,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Err(3)
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(4, &reply), Err(3));
     assert_eq!(pic.get_stable_memory(canister).await, before);
     let error = write(1, 9, 900, 2)
         .await
@@ -611,65 +470,22 @@ async fn product_records_and_message_boundary() {
 
     // Returning an application error after a successful batch does not roll it back.
     let reply = write(1, 9, 900, 3).await.unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 4,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Err(4)
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(4, &reply), Err(4));
     assert_eq!(status().await.2, 2);
     assert_eq!(category(9).await, vec![(1, 900)]);
     assert_eq!(category(1).await, vec![(3, 31), (5, 51)]);
     let before = pic.get_stable_memory(canister).await;
     let reply = write(1, 9, 900, 0).await.unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 4,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(4, &reply), Ok(()));
     assert_eq!(pic.get_stable_memory(canister).await, before); // no-op preserves revision
     type DocumentValue = (String, Option<String>, bool, Option<u64>, i64, Option<i64>);
     let document = async || {
         let reply = pic
-            .query_call(
-                canister,
-                canister,
-                "document",
-                ic_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 7,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
-            )
+            .query_call(canister, canister, "document", wire_frame::request(7, &()))
             .await
             .unwrap();
 
-        ic_wire::decode::<(DocumentValue, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 7,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(DocumentValue, u64)>(7, &reply)
     };
     let replace_document = async |value: DocumentValue| {
         let reply = pic
@@ -677,28 +493,12 @@ async fn product_records_and_message_boundary() {
                 canister,
                 canister,
                 "replace_document",
-                ic_wire::encode(
-                    &value,
-                    Encoding::Frame {
-                        method: 8,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(8, &value),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 8,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<(), u8>>(8, &reply)
     };
     assert_eq!(
         document().await,
@@ -786,43 +586,19 @@ async fn wide_numbers_are_exact_in_wasm_and_rollback_with_the_message() {
                 canister,
                 canister,
                 "wide_numbers",
-                ic_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 11,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(11, &()),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Value, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 11,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Value, u64)>(11, &reply)
     };
     let write = async |value: Value, trap: bool| {
         pic.update_call(
             canister,
             canister,
             "replace_wide_numbers",
-            ic_wire::encode(
-                &(value, trap),
-                Encoding::Frame {
-                    method: 12,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(12, &(value, trap)),
         )
         .await
     };
@@ -882,28 +658,12 @@ async fn binary_values_preserve_bounds_and_bytes_in_wasm() {
                 canister,
                 canister,
                 "binary_decodes",
-                ic_wire::encode(
-                    &ByteBuf::from(bytes),
-                    Encoding::Frame {
-                        method: 15,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(15, &ByteBuf::from(bytes)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<bool>(
-            &reply,
-            Encoding::Frame {
-                method: 15,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<bool>(15, &reply)
     };
     // Independent persisted bytes, transported opaquely: id, absent option,
     // little-endian u32 length, payload. Exercise decoding on 32-bit Wasm.
@@ -926,43 +686,19 @@ async fn binary_values_preserve_bounds_and_bytes_in_wasm() {
                 canister,
                 canister,
                 "binary_object",
-                ic_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 13,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(13, &()),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Value, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 13,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Value, u64)>(13, &reply)
     };
     let write = async |value: Value, trap: bool| {
         pic.update_call(
             canister,
             canister,
             "replace_binary_object",
-            ic_wire::encode(
-                &(value, trap),
-                Encoding::Frame {
-                    method: 14,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(14, &(value, trap)),
         )
         .await
     };
@@ -976,18 +712,7 @@ async fn binary_values_preserve_bounds_and_bytes_in_wasm() {
         .enumerate()
     {
         let reply = write(value.clone(), false).await.unwrap();
-        assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 14,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Ok(())
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(14, &reply), Ok(()));
         assert_eq!(read().await, (value, 2 + offset as u64));
     }
     let before = pic.get_stable_memory(canister).await;
@@ -996,33 +721,11 @@ async fn binary_values_preserve_bounds_and_bytes_in_wasm() {
         (ByteBuf::new(), Some(ByteBuf::from(vec![0; 33]))),
     ] {
         let reply = write(invalid, false).await.unwrap();
-        assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 14,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Err(1)
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(14, &reply), Err(1));
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
     let reply = write(full.clone(), false).await.unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 14,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(14, &reply), Ok(()));
     assert_eq!(pic.get_stable_memory(canister).await, before);
     let error = write((ByteBuf::new(), None), true)
         .await
@@ -1062,43 +765,19 @@ async fn narrow_numbers_preserve_widths_absence_and_message_rollback() {
                 canister,
                 canister,
                 "narrow_numbers",
-                ic_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 16,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(16, &()),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Value, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 16,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Value, u64)>(16, &reply)
     };
     let write = async |value: Value, trap: bool| {
         pic.update_call(
             canister,
             canister,
             "replace_narrow_numbers",
-            ic_wire::encode(
-                &(value, trap),
-                Encoding::Frame {
-                    method: 17,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(17, &(value, trap)),
         )
         .await
     };
@@ -1161,43 +840,19 @@ async fn principal_identity_bytes_survive_wasm_reopen_and_rollback() {
                 canister,
                 canister,
                 "principal_record",
-                ic_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 18,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(18, &()),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Value, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 18,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Value, u64)>(18, &reply)
     };
     let write = async |value: Value, trap: bool| {
         pic.update_call(
             canister,
             canister,
             "replace_principal_record",
-            ic_wire::encode(
-                &(value, trap),
-                Encoding::Frame {
-                    method: 19,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(19, &(value, trap)),
         )
         .await
     };
@@ -1207,28 +862,12 @@ async fn principal_identity_bytes_survive_wasm_reopen_and_rollback() {
                 canister,
                 canister,
                 "principal_decodes",
-                ic_wire::encode(
-                    &ByteBuf::from(bytes),
-                    Encoding::Frame {
-                        method: 20,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(20, &ByteBuf::from(bytes)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<bool>(
-            &reply,
-            Encoding::Frame {
-                method: 20,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<bool>(20, &reply)
     };
     assert_eq!(read().await, ((ByteBuf::from(vec![4]), None), 1));
     let golden = vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 4];
@@ -1254,18 +893,7 @@ async fn principal_identity_bytes_survive_wasm_reopen_and_rollback() {
     {
         let value = (ByteBuf::from(bytes.clone()), Some(ByteBuf::from(bytes)));
         let reply = write(value.clone(), false).await.unwrap();
-        assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 19,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Ok(())
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(19, &reply), Ok(()));
         assert_eq!(read().await, (value, index as u64 + 2));
     }
     let (final_value, revision) = read().await;
@@ -1275,18 +903,7 @@ async fn principal_identity_bytes_survive_wasm_reopen_and_rollback() {
         (ByteBuf::new(), Some(ByteBuf::from(vec![0; 30]))),
     ] {
         let reply = write(invalid, false).await.unwrap();
-        assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 19,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Err(1)
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(19, &reply), Err(1));
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
     write(final_value.clone(), false).await.unwrap();
@@ -1325,15 +942,7 @@ async fn typed_index_order_uniqueness_and_rollback_survive_wasm_reopen() {
             canister,
             canister,
             "indexed_batch",
-            ic_wire::encode(
-                &(rows, trap),
-                Encoding::Frame {
-                    method: 21,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(21, &(rows, trap)),
         )
         .await
     };
@@ -1343,29 +952,12 @@ async fn typed_index_order_uniqueness_and_rollback_survive_wasm_reopen() {
                 canister,
                 canister,
                 "typed_indexes",
-                ic_wire::encode(
-                    &ByteBuf::from(owner),
-                    Encoding::Frame {
-                        method: 22,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(22, &ByteBuf::from(owner)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Read, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 22,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
+        wire_frame::response::<Result<Read, u8>>(22, &reply).unwrap()
     };
     let values = vec![
         (1, ByteBuf::from(vec![4]), i64::MIN),
@@ -1375,18 +967,7 @@ async fn typed_index_order_uniqueness_and_rollback_survive_wasm_reopen() {
         (5, ByteBuf::from(vec![255; 29]), 0),
     ];
     let reply = write(values.clone(), false).await.unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 21,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(21, &reply), Ok(()));
     let expected = vec![(i64::MIN, 1), (-1, 4), (0, 3), (0, 5), (i64::MAX, 2)];
     for (id, owner, _) in values {
         assert_eq!(read(owner.into_vec()).await, (vec![id], expected.clone()));
@@ -1401,18 +982,7 @@ async fn typed_index_order_uniqueness_and_rollback_survive_wasm_reopen() {
         ],
     ] {
         let reply = write(duplicate, false).await.unwrap();
-        assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 21,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Err(3)
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(21, &reply), Err(3));
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
     let swap = vec![
@@ -1422,18 +992,7 @@ async fn typed_index_order_uniqueness_and_rollback_survive_wasm_reopen() {
     assert!(write(swap.clone(), true).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
     let reply = write(swap, false).await.unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 21,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(21, &reply), Ok(()));
     let expected = vec![(i64::MIN, 2), (-1, 4), (0, 3), (0, 5), (i64::MAX, 1)];
     assert_eq!(read(vec![]).await, (vec![1], expected.clone()));
     let before = pic.get_stable_memory(canister).await;
@@ -1461,15 +1020,7 @@ async fn text_index_boundaries_and_boolean_prefixes_survive_wasm_updates() {
             canister,
             canister,
             "text_index_batch",
-            ic_wire::encode(
-                &(rows, trap),
-                Encoding::Frame {
-                    method: 23,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(23, &(rows, trap)),
         )
         .await
     };
@@ -1479,28 +1030,12 @@ async fn text_index_boundaries_and_boolean_prefixes_survive_wasm_updates() {
                 canister,
                 canister,
                 "text_index",
-                ic_wire::encode(
-                    &(published, title),
-                    Encoding::Frame {
-                        method: 24,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(24, &(published, title)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Rows, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 24,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<Rows, u8>>(24, &reply)
     };
     let values = ["aa", "a\0", "a", "", "é", "e\u{301}", "a", "\0", "😀"];
     let rows: Writes = values
@@ -1509,18 +1044,7 @@ async fn text_index_boundaries_and_boolean_prefixes_survive_wasm_updates() {
         .map(|(i, s)| (i as u64 + 1, (*s).into(), false))
         .collect();
     let reply = write(rows, false).await.unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 23,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(23, &reply), Ok(()));
     let mut expected: Rows = values
         .iter()
         .enumerate()
@@ -1541,36 +1065,14 @@ async fn text_index_boundaries_and_boolean_prefixes_survive_wasm_updates() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 23,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Err(1)
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(23, &reply), Err(1));
     assert_eq!(read(false, Some("é".repeat(17))).await, Err(1));
     assert_eq!(pic.get_stable_memory(canister).await, before);
     let change = vec![(3, "a\0b".into(), true)];
     assert!(write(change.clone(), true).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
     let reply = write(change, false).await.unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 23,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(23, &reply), Ok(()));
     expected.retain(|(_, id)| *id != 3);
     assert_eq!(read(false, None).await, Ok(expected.clone()));
     assert_eq!(
@@ -1607,15 +1109,7 @@ async fn optional_membership_and_unique_transfer_survive_wasm_rollback() {
             canister,
             canister,
             "optional_index_batch",
-            ic_wire::encode(
-                &(rows, trap),
-                Encoding::Frame {
-                    method: 25,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(25, &(rows, trap)),
         )
         .await
     };
@@ -1625,28 +1119,12 @@ async fn optional_membership_and_unique_transfer_survive_wasm_rollback() {
                 canister,
                 canister,
                 "optional_indexes",
-                ic_wire::encode(
-                    &value,
-                    Encoding::Frame {
-                        method: 26,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(26, &value),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Read>(
-            &reply,
-            Encoding::Frame {
-                method: 26,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Read>(26, &reply)
     };
     let rows = vec![
         (1, None, None),
@@ -1655,18 +1133,7 @@ async fn optional_membership_and_unique_transfer_survive_wasm_rollback() {
         (4, Some(ByteBuf::from(vec![4])), Some(1)),
     ];
     let reply = write(rows, false).await.unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 25,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(25, &reply), Ok(()));
     let order = vec![(None, 1), (None, 2), (Some(0), 3), (Some(1), 4)];
     assert_eq!(read(None).await, (Err(2), order.clone()));
     assert_eq!(
@@ -1682,18 +1149,7 @@ async fn optional_membership_and_unique_transfer_survive_wasm_rollback() {
         ],
     ] {
         let reply = write(rows, false).await.unwrap();
-        assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 25,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Err(3)
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(25, &reply), Err(3));
         assert_eq!(pic.get_stable_memory(canister).await, before);
     }
     let swap = vec![
@@ -1701,36 +1157,14 @@ async fn optional_membership_and_unique_transfer_survive_wasm_rollback() {
         (4, Some(ByteBuf::new()), Some(0)),
     ];
     let reply = write(swap, false).await.unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 25,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(25, &reply), Ok(()));
     assert_eq!(read(Some(ByteBuf::new())).await.0, Ok(vec![4]));
     let before = pic.get_stable_memory(canister).await;
     let transfer = vec![(4, None, None), (5, Some(ByteBuf::new()), Some(0))];
     assert!(write(transfer.clone(), true).await.is_err());
     assert_eq!(pic.get_stable_memory(canister).await, before);
     let reply = write(transfer, false).await.unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 25,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(25, &reply), Ok(()));
     let expected = (
         Ok(vec![5]),
         vec![(None, 1), (None, 2), (None, 4), (Some(0), 5), (Some(1), 3)],
@@ -1761,28 +1195,12 @@ async fn optional_references_preserve_final_state_rollback_and_upgrade() {
                 canister,
                 canister,
                 "optional_references",
-                ic_wire::encode(
-                    &target,
-                    Encoding::Frame {
-                        method: 28,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(28, &target),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Links>(
-            &reply,
-            Encoding::Frame {
-                method: 28,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Links>(28, &reply)
     };
     let write = async |rows: Vec<(u64, Option<u64>)>, deletes: Vec<u64>| {
         let reply = pic
@@ -1790,28 +1208,12 @@ async fn optional_references_preserve_final_state_rollback_and_upgrade() {
                 canister,
                 canister,
                 "optional_reference_batch",
-                ic_wire::encode(
-                    &(rows, deletes, false),
-                    Encoding::Frame {
-                        method: 27,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(27, &(rows, deletes, false)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 27,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<(), u8>>(27, &reply)
     };
     assert_eq!(write(vec![(1, None)], vec![]).await, Ok(()));
     assert_eq!(read(None).await, (vec![(1, None)], vec![1], 1));
@@ -1831,15 +1233,7 @@ async fn optional_references_preserve_final_state_rollback_and_upgrade() {
         canister,
         canister,
         "optional_reference_batch",
-        ic_wire::encode(
-            &(vec![(1_u64, None::<u64>)], vec![0_u64], true),
-            Encoding::Frame {
-                method: 27,
-                direction: Direction::Request,
-            },
-            LIMITS,
-        )
-        .unwrap(),
+        wire_frame::request(27, &(vec![(1_u64, None::<u64>)], vec![0_u64], true)),
     )
     .await
     .expect_err("successful unlink/delete must roll back with the message");
@@ -1889,29 +1283,11 @@ async fn named_enums_preserve_ordinals_indexes_and_message_rollback() {
             canister,
             canister,
             "enum_write",
-            ic_wire::encode(
-                &(mode, state, previous),
-                Encoding::Frame {
-                    method: 29,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(29, &(mode, state, previous)),
         )
         .await
     };
-    let decode = |reply: &[u8]| {
-        ic_wire::decode::<Result<(Vec<u8>, u64), u8>>(
-            reply,
-            Encoding::Frame {
-                method: 29,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |reply: &[u8]| wire_frame::response::<Result<(Vec<u8>, u64), u8>>(29, reply);
     let golden = vec![1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2];
     assert_eq!(
         decode(&write(1, 2, Some(1)).await.unwrap()),
@@ -1939,30 +1315,11 @@ async fn named_enums_preserve_ordinals_indexes_and_message_rollback() {
                 canister,
                 canister,
                 "enum_decode",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 30,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(30, &bytes),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 30,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
+        assert_eq!(wire_frame::response::<bool>(30, &reply), valid);
     }
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
         .await
@@ -1990,29 +1347,11 @@ async fn nested_records_payloads_and_shared_bounds_survive_wasm_reopen() {
             canister,
             canister,
             "nested_write",
-            ic_wire::encode(
-                &(mode, shape, size),
-                Encoding::Frame {
-                    method: 31,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(31, &(mode, shape, size)),
         )
         .await
     };
-    let decode = |reply: &[u8]| {
-        ic_wire::decode::<Result<(Vec<u8>, u64), u8>>(
-            reply,
-            Encoding::Frame {
-                method: 31,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |reply: &[u8]| wire_frame::response::<Result<(Vec<u8>, u64), u8>>(31, reply);
     let golden = vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, b'x', 0x34, 0x12];
     assert_eq!(
         decode(&write(1, 0, 1).await.unwrap()),
@@ -2041,30 +1380,11 @@ async fn nested_records_payloads_and_shared_bounds_survive_wasm_reopen() {
                 canister,
                 canister,
                 "nested_decodes",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 32,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(32, &bytes),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 32,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
+        assert_eq!(wire_frame::response::<bool>(32, &reply), valid);
     }
     assert!(decode(&write(2, 2, 6).await.unwrap()).is_ok());
     let before = pic.get_stable_memory(canister).await;
@@ -2091,29 +1411,11 @@ async fn ordered_lists_preserve_bounds_and_message_rollback() {
             canister,
             canister,
             "list_write",
-            ic_wire::encode(
-                &(mode, shape, size),
-                Encoding::Frame {
-                    method: 33,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(33, &(mode, shape, size)),
         )
         .await
     };
-    let decode = |reply: &[u8]| {
-        ic_wire::decode::<Result<(Vec<u8>, u64), u8>>(
-            reply,
-            Encoding::Frame {
-                method: 33,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |reply: &[u8]| wire_frame::response::<Result<(Vec<u8>, u64), u8>>(33, reply);
     let golden = vec![
         1, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 2, 1, 2, 1, 2, 1, 0, 0, 0, 0,
     ];
@@ -2149,30 +1451,11 @@ async fn ordered_lists_preserve_bounds_and_message_rollback() {
                 canister,
                 canister,
                 "list_decodes",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 34,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(34, &bytes),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 34,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
+        assert_eq!(wire_frame::response::<bool>(34, &reply), valid);
     }
     assert!(decode(&write(2, 3, 6).await.unwrap()).is_ok());
     let saved = decode(&write(0, 0, 0).await.unwrap());
@@ -2199,29 +1482,11 @@ async fn canonical_sets_preserve_order_and_message_rollback() {
             canister,
             canister,
             "set_write",
-            ic_wire::encode(
-                &(mode, reverse, size),
-                Encoding::Frame {
-                    method: 35,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(35, &(mode, reverse, size)),
         )
         .await
     };
-    let decode = |reply: &[u8]| {
-        ic_wire::decode::<Result<(Vec<u8>, u64), u8>>(
-            reply,
-            Encoding::Frame {
-                method: 35,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |reply: &[u8]| wire_frame::response::<Result<(Vec<u8>, u64), u8>>(35, reply);
     let golden = vec![1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 255, 255, 0, 0, 0, 1];
     assert_eq!(
         decode(&write(1, true, 3).await.unwrap()),
@@ -2255,30 +1520,11 @@ async fn canonical_sets_preserve_order_and_message_rollback() {
                 canister,
                 canister,
                 "set_decodes",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 36,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(36, &bytes),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 36,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
+        assert_eq!(wire_frame::response::<bool>(36, &reply), valid);
     }
     assert_eq!(decode(&write(2, false, 0).await.unwrap()).unwrap().1, 2);
     let saved = decode(&write(0, false, 0).await.unwrap());
@@ -2305,29 +1551,11 @@ async fn canonical_maps_preserve_entries_and_message_rollback() {
             canister,
             canister,
             "map_write",
-            ic_wire::encode(
-                &(mode, shape),
-                Encoding::Frame {
-                    method: 37,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(37, &(mode, shape)),
         )
         .await
     };
-    let decode = |reply: &[u8]| {
-        ic_wire::decode::<Result<(Vec<u8>, u64), u8>>(
-            reply,
-            Encoding::Frame {
-                method: 37,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let decode = |reply: &[u8]| wire_frame::response::<Result<(Vec<u8>, u64), u8>>(37, reply);
     let golden = vec![
         1, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 255, 255, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 2, 0, 0, 0,
         195, 169,
@@ -2364,30 +1592,11 @@ async fn canonical_maps_preserve_entries_and_message_rollback() {
                 canister,
                 canister,
                 "map_decodes",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 38,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(38, &bytes),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 38,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
+        assert_eq!(wire_frame::response::<bool>(38, &reply), valid);
     }
     assert_eq!(decode(&write(2, 4).await.unwrap()).unwrap().1, 2);
     let saved = decode(&write(0, 0).await.unwrap());
@@ -2408,27 +1617,11 @@ async fn canonical_maps_preserve_entries_and_message_rollback() {
                 canister,
                 canister,
                 "map_tree_encode",
-                ic_wire::encode(
-                    &(star, size),
-                    Encoding::Frame {
-                        method: 39,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(39, &(star, size)),
             )
             .await
             .unwrap();
-        let result = ic_wire::decode::<Result<Vec<u8>, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 39,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let result = wire_frame::response::<Result<Vec<u8>, u8>>(39, &reply);
         assert_eq!(result.is_ok(), valid);
         let mut bytes = 1_u64.to_le_bytes().to_vec();
         if star {
@@ -2451,30 +1644,11 @@ async fn canonical_maps_preserve_entries_and_message_rollback() {
                 canister,
                 canister,
                 "map_tree_decodes",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 40,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(40, &bytes),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 40,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
+        assert_eq!(wire_frame::response::<bool>(40, &reply), valid);
     }
     owned.drop().await;
 }
@@ -2662,57 +1836,23 @@ async fn finite_floats_preserve_domain_zero_uniqueness_and_rollback() {
             canister,
             canister,
             "float_batch",
-            ic_wire::encode(
-                &(rows, trap),
-                Encoding::Frame {
-                    method: 45,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(45, &(rows, trap)),
         )
         .await
     };
-    let result = |reply: &[u8]| {
-        ic_wire::decode::<Result<(), u8>>(
-            reply,
-            Encoding::Frame {
-                method: 45,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let result = |reply: &[u8]| wire_frame::response::<Result<(), u8>>(45, reply);
     let read = async |small: bool| {
         let reply = pic
             .query_call(
                 canister,
                 canister,
                 "float_rows",
-                ic_wire::encode(
-                    &small,
-                    Encoding::Frame {
-                        method: 46,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(46, &small),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 46,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Vec<(u64, Vec<u8>)>, u64)>(46, &reply)
     };
     // Literal IEEE patterns: finite extremes, +/-1, normals, subnormals and zero.
     let small = [
@@ -2827,28 +1967,12 @@ async fn finite_floats_preserve_domain_zero_uniqueness_and_rollback() {
                 canister,
                 canister,
                 "float_lookup",
-                ic_wire::encode(
-                    &bits,
-                    Encoding::Frame {
-                        method: 47,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(47, &bits),
             )
             .await
             .unwrap();
         assert_eq!(
-            ic_wire::decode::<Result<Vec<u64>, u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 47,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
+            wire_frame::response::<Result<Vec<u64>, u8>>(47, &reply),
             Ok(vec![9])
         );
     }
@@ -2887,30 +2011,11 @@ async fn finite_floats_preserve_domain_zero_uniqueness_and_rollback() {
                 canister,
                 canister,
                 "float_decodes",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 48,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(48, &bytes),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 48,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
+        assert_eq!(wire_frame::response::<bool>(48, &reply), valid);
     }
     let before = pic.get_stable_memory(canister).await;
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
@@ -2939,57 +2044,23 @@ async fn accounts_preserve_default_identity_order_and_rollback() {
             canister,
             canister,
             "account_batch",
-            ic_wire::encode(
-                &(rows, trap),
-                Encoding::Frame {
-                    method: 49,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(49, &(rows, trap)),
         )
         .await
     };
-    let result = |r: &[u8]| {
-        ic_wire::decode::<Result<(), u8>>(
-            r,
-            Encoding::Frame {
-                method: 49,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let result = |r: &[u8]| wire_frame::response::<Result<(), u8>>(49, r);
     let read = async |sub: bool| {
         let reply = pic
             .query_call(
                 canister,
                 canister,
                 "account_rows",
-                ic_wire::encode(
-                    &sub,
-                    Encoding::Frame {
-                        method: 50,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(50, &sub),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 50,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Vec<(u64, Vec<u8>)>, u64)>(50, &reply)
     };
     let values: Vec<AccountInput> = vec![
         (vec![], None),
@@ -3093,28 +2164,12 @@ async fn accounts_preserve_default_identity_order_and_rollback() {
                 canister,
                 canister,
                 "account_lookup",
-                ic_wire::encode(
-                    &value,
-                    Encoding::Frame {
-                        method: 51,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(51, &value),
             )
             .await
             .unwrap();
         assert_eq!(
-            ic_wire::decode::<Result<Vec<u64>, u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 51,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
+            wire_frame::response::<Result<Vec<u64>, u8>>(51, &reply),
             Ok(vec![8])
         );
     }
@@ -3143,30 +2198,11 @@ async fn accounts_preserve_default_identity_order_and_rollback() {
                 canister,
                 canister,
                 "account_decodes",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 52,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(52, &bytes),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 52,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
+        assert_eq!(wire_frame::response::<bool>(52, &reply), valid);
     }
     let before = pic.get_stable_memory(canister).await;
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
@@ -3198,27 +2234,11 @@ async fn ulid_exact_order_uniqueness_and_message_rollback() {
                 canister,
                 canister,
                 "ulid_text",
-                ic_wire::encode(
-                    &text.to_string(),
-                    Encoding::Frame {
-                        method: 57,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(57, &text.to_string()),
             )
             .await
             .unwrap();
-        let result = ic_wire::decode::<Result<(String, [u8; 16]), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 57,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap();
+        let result = wire_frame::response::<Result<(String, [u8; 16]), u8>>(57, &reply);
 
         if accepted {
             assert_eq!(
@@ -3348,57 +2368,23 @@ async fn time_values_preserve_units_order_and_message_rollback() {
             canister,
             canister,
             "time_batch",
-            ic_wire::encode(
-                &(rows, trap),
-                Encoding::Frame {
-                    method: 62,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(62, &(rows, trap)),
         )
         .await
     };
-    let result = |reply: &[u8]| {
-        ic_wire::decode::<Result<(), u8>>(
-            reply,
-            Encoding::Frame {
-                method: 62,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let result = |reply: &[u8]| wire_frame::response::<Result<(), u8>>(62, reply);
     let read = async |duration: bool| {
         let reply = pic
             .query_call(
                 canister,
                 canister,
                 "time_rows",
-                ic_wire::encode(
-                    &duration,
-                    Encoding::Frame {
-                        method: 63,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(63, &duration),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 63,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Vec<(u64, Vec<u8>)>, u64)>(63, &reply)
     };
     let mut rows: Vec<Row> = [
         (0, i64::MIN),
@@ -3495,30 +2481,11 @@ async fn time_values_preserve_units_order_and_message_rollback() {
                 canister,
                 canister,
                 "time_decodes",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 64,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(64, &bytes),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 64,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
+        assert_eq!(wire_frame::response::<bool>(64, &reply), valid);
     }
     for (d, t, expected) in [
         ("2s", "1969-12-31T23:59:59.999999999Z", Ok((2000, -1))),
@@ -3535,28 +2502,12 @@ async fn time_values_preserve_units_order_and_message_rollback() {
                 canister,
                 canister,
                 "time_text",
-                ic_wire::encode(
-                    &(d.to_string(), t.to_string()),
-                    Encoding::Frame {
-                        method: 65,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(65, &(d.to_string(), t.to_string())),
             )
             .await
             .unwrap();
         assert_eq!(
-            ic_wire::decode::<Result<(u64, i64), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 65,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
+            wire_frame::response::<Result<(u64, i64), u8>>(65, &reply),
             expected
         );
     }
@@ -3565,28 +2516,12 @@ async fn time_values_preserve_units_order_and_message_rollback() {
             canister,
             canister,
             "time_math",
-            ic_wire::encode(
-                &(-1001_i64, -1_i64, u64::MAX),
-                Encoding::Frame {
-                    method: 66,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(66, &(-1001_i64, -1_i64, u64::MAX)),
         )
         .await
         .unwrap();
     assert_eq!(
-        ic_wire::decode::<(i64, i64, i64, i64)>(
-            &reply,
-            Encoding::Frame {
-                method: 66,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
+        wire_frame::response::<(i64, i64, i64, i64)>(66, &reply),
         (-2, -1, i64::MAX, i64::MIN)
     );
     let before = pic.get_stable_memory(canister).await;
@@ -3615,57 +2550,23 @@ async fn decimals_preserve_exact_scale_uniqueness_and_rollback() {
             canister,
             canister,
             "decimal_batch",
-            ic_wire::encode(
-                &(rows, trap),
-                Encoding::Frame {
-                    method: 67,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(67, &(rows, trap)),
         )
         .await
     };
-    let result = |reply: &[u8]| {
-        ic_wire::decode::<Result<(), u8>>(
-            reply,
-            Encoding::Frame {
-                method: 67,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let result = |reply: &[u8]| wire_frame::response::<Result<(), u8>>(67, reply);
     let read = async || {
         let reply = pic
             .query_call(
                 canister,
                 canister,
                 "decimal_rows",
-                ic_wire::encode(
-                    &(),
-                    Encoding::Frame {
-                        method: 68,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(68, &()),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Vec<(u64, Vec<u8>)>, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 68,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Vec<(u64, Vec<u8>)>, u64)>(68, &reply)
     };
     // Independent literal fixed-scale coefficients: no database Decimal parser
     // or encoder in the oracle, including both extreme signed coefficients.
@@ -3769,30 +2670,11 @@ async fn decimals_preserve_exact_scale_uniqueness_and_rollback() {
                 canister,
                 canister,
                 "decimal_decodes",
-                ic_wire::encode(
-                    &bytes,
-                    Encoding::Frame {
-                        method: 69,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(69, &bytes),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<bool>(
-                &reply,
-                Encoding::Frame {
-                    method: 69,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            valid
-        );
+        assert_eq!(wire_frame::response::<bool>(69, &reply), valid);
     }
     let before = pic.get_stable_memory(canister).await;
     ic_db_m0_rollback_driver::upgrade_stopped(pic, canister, wasm, vec![], None)
@@ -3825,57 +2707,23 @@ async fn ulid_primary_keys_keep_paging_references_and_message_rollback() {
             canister,
             canister,
             "key_batch",
-            ic_wire::encode(
-                &request,
-                Encoding::Frame {
-                    method: 70,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(70, &request),
         )
         .await
     };
-    let result = |reply: &[u8]| {
-        ic_wire::decode::<Result<(), u8>>(
-            reply,
-            Encoding::Frame {
-                method: 70,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let result = |reply: &[u8]| wire_frame::response::<Result<(), u8>>(70, reply);
     let page = async |after: Option<[u8; 16]>, limit: u8| {
         let reply = pic
             .query_call(
                 canister,
                 canister,
                 "key_page",
-                ic_wire::encode(
-                    &(after, limit),
-                    Encoding::Frame {
-                        method: 71,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(71, &(after, limit)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Vec<Row>, Option<[u8; 16]>, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 71,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Vec<Row>, Option<[u8; 16]>, u64)>(71, &reply)
     };
     let lookup = async |id: [u8; 16], value: u64| {
         let reply = pic
@@ -3883,28 +2731,12 @@ async fn ulid_primary_keys_keep_paging_references_and_message_rollback() {
                 canister,
                 canister,
                 "key_lookup",
-                ic_wire::encode(
-                    &(id, value),
-                    Encoding::Frame {
-                        method: 72,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(72, &(id, value)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Option<Row>, Vec<Row>)>(
-            &reply,
-            Encoding::Frame {
-                method: 72,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Option<Row>, Vec<Row>)>(72, &reply)
     };
     let mut rows: Vec<Row> = [
         0,
@@ -4023,57 +2855,23 @@ async fn integer_primary_keys_preserve_signed_order_full_width_and_rollback() {
             canister,
             canister,
             "integer_key_batch",
-            ic_wire::encode(
-                &request,
-                Encoding::Frame {
-                    method: 73,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(73, &request),
         )
         .await
     };
-    let result = |bytes: &[u8]| {
-        ic_wire::decode::<Result<(), u8>>(
-            bytes,
-            Encoding::Frame {
-                method: 73,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-    };
+    let result = |bytes: &[u8]| wire_frame::response::<Result<(), u8>>(73, bytes);
     let signed_page = async |after: Option<i128>, limit: u8| {
         let reply = pic
             .query_call(
                 canister,
                 canister,
                 "signed_key_page",
-                ic_wire::encode(
-                    &(after, limit),
-                    Encoding::Frame {
-                        method: 74,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(74, &(after, limit)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Vec<Signed>, Option<i128>, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 74,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Vec<Signed>, Option<i128>, u64)>(74, &reply)
     };
     let wide_page = async |after: Option<[u8; 32]>, limit: u8| {
         let reply = pic
@@ -4081,28 +2879,12 @@ async fn integer_primary_keys_preserve_signed_order_full_width_and_rollback() {
                 canister,
                 canister,
                 "wide_key_page",
-                ic_wire::encode(
-                    &(after, limit),
-                    Encoding::Frame {
-                        method: 75,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(75, &(after, limit)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Vec<Wide>, Option<[u8; 32]>, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 75,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Vec<Wide>, Option<[u8; 32]>, u64)>(75, &reply)
     };
     let lookup = async |rank: u64| {
         let reply = pic
@@ -4110,28 +2892,12 @@ async fn integer_primary_keys_preserve_signed_order_full_width_and_rollback() {
                 canister,
                 canister,
                 "integer_key_lookup",
-                ic_wire::encode(
-                    &rank,
-                    Encoding::Frame {
-                        method: 76,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(76, &rank),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Vec<Signed>, Vec<Wide>)>(
-            &reply,
-            Encoding::Frame {
-                method: 76,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Vec<Signed>, Vec<Wide>)>(76, &reply)
     };
     let signed_ids = [i128::MIN, -1, 0, 1, i128::MAX];
     let mut one = [0; 32];

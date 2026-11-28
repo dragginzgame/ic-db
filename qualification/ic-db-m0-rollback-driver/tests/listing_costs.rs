@@ -2,6 +2,7 @@
 
 mod wire_call;
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::instance;
 use wire_call::call;
 
@@ -502,7 +503,7 @@ async fn ulid_time_listing_resumes_inside_a_millisecond() {
                 method: 246,
                 direction,
             };
-            let request = ic_wire::encode(
+            let request = fixture_wire::encode(
                 &(100_i64, 102_i64, cursor, ids_only),
                 frame(Direction::Request),
                 LIMITS,
@@ -513,7 +514,7 @@ async fn ulid_time_listing_resumes_inside_a_millisecond() {
                 .await
                 .unwrap();
             let (actual, next, examined, fetched, bytes, open, query): Sample =
-                ic_wire::decode(&reply, frame(Direction::Response), LIMITS).unwrap();
+                fixture_wire::decode(&reply, frame(Direction::Response), LIMITS).unwrap();
             assert_eq!(actual, ids);
             assert_eq!(examined as usize, ids.len());
             assert_eq!(fetched, examined);

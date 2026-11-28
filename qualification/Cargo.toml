@@ -36,8 +36,11 @@ ic-host-artifacts = "0.80.6"
 ic-platform-runtime = { version = "0.23.27", default-features = false }
 ic-storage = "0.80.6"
 ic-testkit = { version = "0.110.3", default-features = false }
-ic-wire = "0.32.0"
+ic-wire = "0.33.0"
+# Archived v0.33.1 console and original positional M0 codec vectors.
+ic-wire-positional = { package = "ic-wire", version = "0.31.2" }
 icydb = { git = "https://github.com/dragginzgame/icydb-legacy", rev = "6d421e3601a3d71e42af23ea5fe6b168cb6ef2ac", default-features = false }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 records-schema = { package = "ic-db-m1-records-schema", path = "ic-db-m1-records-schema" }
 rusqlite = { version = "0.43.0", default-features = false, features = ["bundled"] }
 serde = "1.0.229"

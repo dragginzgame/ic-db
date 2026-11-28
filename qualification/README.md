@@ -12,11 +12,12 @@ In a native cross-version check, Storage 0.80.0 refused all 262,144 bytes of a p
 
 Storage 0.80 records codec bounds in the map header. Raw DB probes use the physical 512-byte variable key bound and an unbounded byte value. Opening with different bounds refuses before writing. The installed count witness preserved stable backing across an ordinary upgrade.
 
-Package directories match their Cargo package names. Qualification callers use
-Wire 0.32.0's root `encode`/`decode` APIs with explicit `Encoding::Frame` direction
-and existing method IDs, or `Encoding::Payload` for isolated codec probes. The
-mixed-lifecycle driver uses Canic's published limits when exchanging frames
-with Canic 0.277.0 endpoints `canic_db_inspect`, `canic_db_query` and `canic_db_write`. The driver and downstream schema inspection probe use Wire 0.32.0. Canic 0.277.0 endpoints use their published Wire 0.31.2 codec. The frozen IcyDB comparison
+Package directories match their Cargo package names. The CLI and standalone qualification endpoints use
+Wire 0.33.0 sparse frames around their positional fixture bodies, with explicit
+directions, method IDs and resource limits. The downstream schema probe exercises
+derived application messages and a generated TypeScript cursor client. The
+mixed-lifecycle driver uses Canic 0.277.0’s own Wire 0.31.2 codec and limits
+for its inspection, query and write endpoints. The frozen IcyDB comparison
 retains its separate transitive Wire 0.22.4 selection.
 
 With the named-struct worktree as the 0.275.0 control, the 0.276.0 adoption
@@ -1185,6 +1186,31 @@ Types 0.20.4, Wire 0.22.2 and Testkit 0.106.0/PocketIC 16.1.0. Testkit's
 transitive Platform resolves to 0.33.5.
 Prior recorded M0/baseline results used the versions stated with that evidence;
 the updated lockfile does not retroactively requalify those results.
+
+## Batch upsert in the records fixture
+
+The 0.37.0 records fixture read each primary key before choosing insert or replace.
+Matched PocketIC runs used fresh installations, identical U256 inputs and the same release
+build settings. Whole-call cycles came from the ordinary endpoint. A second pair of
+builds bracketed its handler with the IC instruction counter. The 16-row journey
+inserted unique keys, replayed the identical batch, replaced all 16 values, then
+submitted the 16 replacements with the first key appended a second time.
+
+| Operation | Instructions before | With batch upsert | Charged cycles before | With batch upsert |
+| --- | ---: | ---: | ---: | ---: |
+| Insert | 8,015,757 | 7,472,443 | 17,421,604 | 16,878,290 |
+| Identical replay | 2,141,079 | 1,381,299 | 11,545,935 | 10,786,198 |
+| Replace | 9,217,350 | 8,466,779 | 18,622,249 | 17,871,678 |
+| Refuse duplicate target | 2,155,490 | 1,395,743 | 11,710,983 | 10,951,236 |
+
+The replay and duplicate refusal preserved the entire stable backing. The saving
+comes from removing the fixture's preliminary lookup. As a read-path control,
+a two-row fluent page over eight seeded rows took 158,602 execution instructions
+with eight reachable entities and 153,218 with 32, identical before and after.
+The 16 retained DISTINCT and repeated-key probes ranged from equal cost to 250
+additional charged cycles per call. Uncompressed Wasm shrank by 11,309 bytes
+for records, 10,507 for jobs and 12,237 for the retained console. The two fluent
+entity-growth builds each grew by six bytes.
 
 ## Maximum write envelope
 

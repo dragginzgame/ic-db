@@ -1,5 +1,6 @@
 //! Canonical Account/Subaccount keys across cross-entity batches and IC messages.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
@@ -31,7 +32,7 @@ async fn account_aliases_and_mixed_references_survive_rollback_and_upgrade() {
                 canister,
                 canister,
                 "account_keys_write",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(mode, accounts, subs, trap),
                     Encoding::Frame {
                         method: 86,
@@ -44,7 +45,7 @@ async fn account_aliases_and_mixed_references_survive_rollback_and_upgrade() {
             .await
         };
     let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<(), u8>>(
+        fixture_wire::decode::<Result<(), u8>>(
             &bytes,
             Encoding::Frame {
                 method: 86,
@@ -61,7 +62,7 @@ async fn account_aliases_and_mixed_references_survive_rollback_and_upgrade() {
                     canister,
                     canister,
                     "account_keys_page",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &(after, sub_after, limit, rank),
                         Encoding::Frame {
                             method: 87,
@@ -74,7 +75,7 @@ async fn account_aliases_and_mixed_references_survive_rollback_and_upgrade() {
                 .await
                 .unwrap();
 
-            ic_wire::decode::<Page>(
+            fixture_wire::decode::<Page>(
                 &bytes,
                 Encoding::Frame {
                     method: 87,

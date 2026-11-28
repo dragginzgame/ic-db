@@ -28,7 +28,8 @@ console = [
     "dep:shlex",
     "tokio/rt-multi-thread",
 ]
-host = ["dep:ic-testkit", "dep:ic-wire", "dep:tokio"]
+fixture-wire = ["dep:ic-wire"]
+host = ["dep:ic-testkit", "fixture-wire", "dep:tokio"]
 
 [dependencies]
 clap = { workspace = true, optional = true }

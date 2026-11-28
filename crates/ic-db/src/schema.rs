@@ -686,10 +686,7 @@ impl Schema {
     /// resolver fails to reproduce its admitted declaration.
     pub fn describe(&self, selected: Option<&str>) -> Result<SchemaDescription<'_>, Error> {
         let (entities, types) = if let Some(name) = selected {
-            let position = self
-                .entities()
-                .binary_search_by_key(&name, |entity| entity.name)
-                .map_err(|_| Error::UnknownEntity)?;
+            let position = self.entity_position(name).ok_or(Error::UnknownEntity)?;
             let entity = self.entities()[position];
             let mut reachable = TypeGraph::default();
             for field in entity.fields {
@@ -720,10 +717,14 @@ impl Schema {
     }
 
     pub(crate) fn entity_by_name(&self, name: &str) -> Option<&'static EntitySchema> {
+        self.entity_position(name)
+            .map(|position| self.entities()[position])
+    }
+
+    fn entity_position(&self, name: &str) -> Option<usize> {
         self.entities()
             .binary_search_by_key(&name, |entity| entity.name)
             .ok()
-            .map(|position| self.entities()[position])
     }
 
     /// Reachable named definitions in logical-name order, without expanding cycles.

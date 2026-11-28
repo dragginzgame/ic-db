@@ -175,6 +175,12 @@ pub struct VariantSchema {
     pub payload: Option<ValueSchema>,
 }
 
+fn valid_variants(variants: &[VariantSchema]) -> bool {
+    (1..=64).contains(&variants.len())
+        && variants.iter().all(|v| (1..=64).contains(&v.name.len()))
+        && variants.windows(2).all(|w| w[0].name < w[1].name)
+}
+
 // Ordered capability belongs to the complete enum, including unused variants.
 // Bound unchecked operand definitions before comparing them with admitted metadata.
 pub(crate) fn unit_enum_len(definition: &TypeSchema) -> Option<usize> {
@@ -184,12 +190,8 @@ pub(crate) fn unit_enum_len(definition: &TypeSchema) -> Option<usize> {
 
     (!definition.name.is_empty()
         && definition.name.len() <= 64
-        && !variants.is_empty()
-        && variants.len() <= 64
-        && variants
-            .iter()
-            .all(|v| v.payload.is_none() && !v.name.is_empty() && v.name.len() <= 64)
-        && variants.windows(2).all(|w| w[0].name < w[1].name))
+        && valid_variants(variants)
+        && variants.iter().all(|v| v.payload.is_none()))
     .then_some(variants.len())
 }
 /// Payload shape, shared with the field type/optionality rules.
@@ -389,10 +391,7 @@ impl TypeGraph {
                     encode_type(bytes, *item, false, false)?;
                 }
                 TypeBody::Enum(variants) => {
-                    if variants.is_empty()
-                        || variants.len() > 64
-                        || variants.windows(2).any(|w| w[0].name >= w[1].name)
-                    {
+                    if !valid_variants(variants) {
                         return Err(Error::InvalidSchema);
                     }
                     for variant in *variants {

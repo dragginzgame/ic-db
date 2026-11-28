@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.38.0] - Unreleased
+
+### ⚠️ Breaking
+
+- Adopt IC Wire 0.33.0 for application schema inspection and the fixture console. Regenerate application clients and upgrade the console and fixture together for the sparse message format. Database row and cursor bytes keep their existing encoding.
+
+### 🔄 Changed
+
+- Qualification writes for scalar and indexed records now use batch upsert, avoiding a preliminary row lookup. The private records fixture removes the unused `envelope_row` and `envelope_listing` exports. The write-envelope driver continues to inspect index results and backing bytes.
+
 ## [0.37.0] - 2026-11-28
 
 ### ⚠️ Breaking

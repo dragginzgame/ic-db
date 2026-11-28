@@ -1,8 +1,8 @@
 //! Fluent query pages remain bounded and resume across upgrades in real Wasm.
 
-use ic_db_m0_rollback_driver::{LIMITS, instance};
+use ic_db_m0_rollback_driver::instance;
 use ic_db_qualification_transport::{ComparisonFilter, FilterComparison, RowFilters};
-use ic_wire::{Direction, Encoding};
+mod wire_frame;
 
 type Page = (Vec<(u64, u64)>, Option<Vec<u8>>, u32, u32, u32, u64);
 type Request = (Option<Vec<u8>>, bool, Option<u64>, u64, u32, u32, u32);
@@ -58,59 +58,23 @@ async fn indexed_text_prefixes_seek_exact_bytes_and_retry_after_upgrade() {
             canister,
             canister,
             "reference_batch",
-            ic_wire::encode(
-                &4_u8,
-                Encoding::Frame {
-                    method: 10,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(10, &4_u8),
         )
         .await
         .unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &setup,
-            Encoding::Frame {
-                method: 10,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(10, &setup), Ok(()));
     let call = async |needle: &str, descending: bool, cursor: Option<Vec<u8>>, bytes: u32| {
         let reply = pic
             .query_call(
                 canister,
                 canister,
                 "fluent_text_seek",
-                ic_wire::encode(
-                    &(needle, descending, cursor, 4_u32, bytes),
-                    Encoding::Frame {
-                        method: 132,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(132, &(needle, descending, cursor, 4_u32, bytes)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<IdPage, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 132,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
+        wire_frame::response::<Result<IdPage, u8>>(132, &reply).unwrap()
     };
     for title in ["", "\0x", "a\0b", "\u{10ffff}x", "Dependent\0"] {
         let reply = pic
@@ -118,7 +82,8 @@ async fn indexed_text_prefixes_seek_exact_bytes_and_retry_after_upgrade() {
                 canister,
                 canister,
                 "replace_document",
-                ic_wire::encode(
+                wire_frame::request(
+                    8,
                     &(
                         title,
                         None::<String>,
@@ -127,28 +92,11 @@ async fn indexed_text_prefixes_seek_exact_bytes_and_retry_after_upgrade() {
                         -10_i64,
                         None::<i64>,
                     ),
-                    Encoding::Frame {
-                        method: 8,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                ),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 8,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Ok(())
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(8, &reply), Ok(()));
         let before = pic.get_stable_memory(canister).await;
         for needle in ["", "D", "Dependent\0", "a\0", "\0", "\u{10ffff}", "missing"] {
             let mut expected: Vec<_> = [(title, 1_u64), ("Dependent first", 2)]
@@ -208,29 +156,15 @@ async fn index_ranges_preserve_duplicate_classes_prefixes_and_upgrade_continuati
                 canister,
                 canister,
                 "fluent_index_range",
-                ic_wire::encode(
+                wire_frame::request(
+                    131,
                     &(cursor, descending, category, lower, upper, 32_u32, bytes),
-                    Encoding::Frame {
-                        method: 131,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                ),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<IdPage, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 131,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
+        wire_frame::response::<Result<IdPage, u8>>(131, &reply).unwrap()
     };
     let before = pic.get_stable_memory(canister).await;
     let ascending = call(None, false, None, 0, 0, 8).await;
@@ -285,29 +219,12 @@ async fn primary_ranges_seek_and_resume_in_both_directions_across_upgrade() {
                 canister,
                 canister,
                 "fluent_primary_range",
-                ic_wire::encode(
-                    &(cursor, descending, lower, upper, work, bytes),
-                    Encoding::Frame {
-                        method: 130,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(130, &(cursor, descending, lower, upper, work, bytes)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<IdPage, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 130,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap()
+        wire_frame::response::<Result<IdPage, u8>>(130, &reply).unwrap()
     };
     let backing = pic.get_stable_memory(canister).await;
     assert_eq!(call(None, false, 4, 4, 1, 8).await, (vec![4], None, 1));
@@ -391,28 +308,12 @@ async fn existence_and_counts_keep_work_bounds_and_upgrade_behavior() {
                 canister,
                 canister,
                 "query",
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 3,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(3, &request),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<DisplayPage, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 3,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<DisplayPage, String>>(3, &reply)
     };
     let call = |minimum, category, work, terminal| {
         query(
@@ -512,28 +413,12 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
                 canister,
                 canister,
                 "fluent_list_presence",
-                ic_wire::encode(
-                    &(mode, cursor),
-                    Encoding::Frame {
-                        method: 129,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(129, &(mode, cursor)),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<IdPage, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 129,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<IdPage, u8>>(129, &reply)
     };
     for (mode, shape, size) in [
         (1_u8, 0_u8, 0_u8),
@@ -547,30 +432,11 @@ async fn optional_list_filters_project_and_continue_across_upgrade() {
                 canister,
                 canister,
                 "list_write",
-                ic_wire::encode(
-                    &(mode, shape, size),
-                    Encoding::Frame {
-                        method: 33,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(33, &(mode, shape, size)),
             )
             .await
             .unwrap();
-        assert!(
-            ic_wire::decode::<Result<(Vec<u8>, u64), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 33,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap()
-            .is_ok()
-        );
+        assert!(wire_frame::response::<Result<(Vec<u8>, u64), u8>>(33, &reply).is_ok());
         let before = pic.get_stable_memory(canister).await;
         for (filter, matches) in [
             (0, shape != 2),
@@ -619,30 +485,11 @@ async fn sparse_presence_order_resumes_after_upgrade_without_losing_absent_match
             canister,
             canister,
             "decimal_batch",
-            ic_wire::encode(
-                &(rows, false),
-                Encoding::Frame {
-                    method: 67,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            wire_frame::request(67, &(rows, false)),
         )
         .await
         .unwrap();
-    assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 67,
-                direction: Direction::Response
-            },
-            LIMITS
-        )
-        .unwrap(),
-        Ok(())
-    );
+    assert_eq!(wire_frame::response::<Result<(), u8>>(67, &reply), Ok(()));
     let call =
         async |include_absent: bool, descending: bool, cursor: Option<Vec<u8>>, bytes: u32| {
             let reply = pic
@@ -650,28 +497,12 @@ async fn sparse_presence_order_resumes_after_upgrade_without_losing_absent_match
                     canister,
                     canister,
                     "fluent_sparse_presence",
-                    ic_wire::encode(
-                        &(include_absent, descending, cursor, bytes),
-                        Encoding::Frame {
-                            method: 128,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(128, &(include_absent, descending, cursor, bytes)),
                 )
                 .await
                 .unwrap();
 
-            ic_wire::decode::<Result<SparsePage, u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 128,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap()
+            wire_frame::response::<Result<SparsePage, u8>>(128, &reply)
         };
     let before = pic.get_stable_memory(canister).await;
     // OR admits absence here: the only available optional-field order is incomplete.
@@ -736,28 +567,12 @@ async fn text_matching_uses_exact_utf8_and_resumes_across_upgrade() {
                 canister,
                 canister,
                 name,
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(method, &request),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<TextPage, u8>>(
-            &reply,
-            Encoding::Frame {
-                method,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<TextPage, u8>>(method, &reply)
     };
     for note in [
         None,
@@ -775,30 +590,11 @@ async fn text_matching_uses_exact_utf8_and_resumes_across_upgrade() {
                 canister,
                 canister,
                 "replace_document",
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 8,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(8, &request),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 8,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Ok(())
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(8, &reply), Ok(()));
         let before = pic.get_stable_memory(canister).await;
         for mode in 0..3 {
             for needle in [
@@ -866,28 +662,12 @@ async fn membership_filters_do_not_duplicate_rows_and_resume_after_upgrade() {
                 canister,
                 canister,
                 "fluent_membership",
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 124,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(124, &request),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Page, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 124,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<Page, u8>>(124, &reply)
     };
     for descending in [false, true] {
         let mut cursor = None;
@@ -955,28 +735,12 @@ async fn any_filters_page_and_preserve_existing_conjunction_cursors() {
                 canister,
                 canister,
                 method,
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: id,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(id, &request),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Page, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: id,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<Page, u8>>(id, &reply)
     };
     let page = call(false, (None, false, None, 20, 1, 128, 4096))
         .await
@@ -1049,28 +813,12 @@ async fn sparse_fluent_pages_retry_and_reopen() {
                 canister,
                 canister,
                 "fluent_query",
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 95,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(95, &request),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Page, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 95,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<Page, u8>>(95, &reply)
     };
     let before = pic.get_stable_memory(canister).await;
     let selected =
@@ -1113,28 +861,12 @@ async fn sparse_fluent_pages_retry_and_reopen() {
                     canister,
                     canister,
                     "query",
-                    ic_wire::encode(
-                        &request,
-                        Encoding::Frame {
-                            method: 3,
-                            direction: Direction::Request,
-                        },
-                        LIMITS,
-                    )
-                    .unwrap(),
+                    wire_frame::request(3, &request),
                 )
                 .await
                 .unwrap();
 
-            ic_wire::decode::<Result<DisplayPage, String>>(
-                &reply,
-                Encoding::Frame {
-                    method: 3,
-                    direction: Direction::Response,
-                },
-                LIMITS,
-            )
-            .unwrap()
+            wire_frame::response::<Result<DisplayPage, String>>(3, &reply)
         };
     let console = async |request: ConsoleRequest<'_>| selected(request, None, None).await;
     let complete_distinct = async |limit, work, bytes, descending| {
@@ -1492,28 +1224,12 @@ async fn sparse_fluent_pages_retry_and_reopen() {
                 canister,
                 canister,
                 "fluent_ordered",
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 98,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(98, &request),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Page, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 98,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<Page, u8>>(98, &reply)
     };
     let order_start = ordered((None, false, Some(1), 40, 2, 1, 4096))
         .await
@@ -1537,28 +1253,12 @@ async fn sparse_fluent_pages_retry_and_reopen() {
                 canister,
                 canister,
                 "fluent_projection",
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 96,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(96, &request),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Page, u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 96,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<Page, u8>>(96, &reply)
     };
     let even = project((None, false, Some(0), 0, 1, 1, 4096))
         .await
@@ -1715,7 +1415,8 @@ async fn sparse_fluent_pages_retry_and_reopen() {
             canister,
             canister,
             "replace_binary_object",
-            ic_wire::encode(
+            wire_frame::request(
+                14,
                 &(
                     (
                         ic_wire::ByteBuf::from(vec![7; 1024]),
@@ -1723,26 +1424,11 @@ async fn sparse_fluent_pages_retry_and_reopen() {
                     ),
                     false,
                 ),
-                Encoding::Frame {
-                    method: 14,
-                    direction: Direction::Request,
-                },
-                LIMITS,
-            )
-            .unwrap(),
+            ),
         )
         .await
         .unwrap();
-    ic_wire::decode::<Result<(), u8>>(
-        &reply,
-        Encoding::Frame {
-            method: 14,
-            direction: Direction::Response,
-        },
-        LIMITS,
-    )
-    .unwrap()
-    .unwrap();
+    wire_frame::response::<Result<(), u8>>(14, &reply).unwrap();
     let before = pic.get_stable_memory(canister).await;
     let binary = async |projected: bool| {
         let reply = pic
@@ -1750,28 +1436,12 @@ async fn sparse_fluent_pages_retry_and_reopen() {
                 canister,
                 canister,
                 "fluent_binary_projection",
-                ic_wire::encode(
-                    &projected,
-                    Encoding::Frame {
-                        method: 97,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(97, &projected),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<(Vec<u64>, u32, u64)>(
-            &reply,
-            Encoding::Frame {
-                method: 97,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<(Vec<u64>, u32, u64)>(97, &reply)
     };
     let full = binary(false).await;
     let projected = binary(true).await;
@@ -1788,28 +1458,11 @@ async fn sparse_fluent_pages_retry_and_reopen() {
                 canister,
                 canister,
                 "write",
-                ic_wire::encode(
-                    &(id, id % 2, u64::MAX, 0_u8),
-                    Encoding::Frame {
-                        method: 4,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(4, &(id, id % 2, u64::MAX, 0_u8)),
             )
             .await
             .unwrap();
-        ic_wire::decode::<Result<(), u8>>(
-            &reply,
-            Encoding::Frame {
-                method: 4,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
-        .unwrap();
+        wire_frame::response::<Result<(), u8>>(4, &reply).unwrap();
     }
     let before = pic.get_stable_memory(canister).await;
     let widened = aggregate("sum:amount", 1, 6, 16).await.unwrap();
@@ -1850,30 +1503,11 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
                 canister,
                 canister,
                 "decimal_batch",
-                ic_wire::encode(
-                    &(rows, false),
-                    Encoding::Frame {
-                        method: 67,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(67, &(rows, false)),
             )
             .await
             .unwrap();
-        assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
-                &reply,
-                Encoding::Frame {
-                    method: 67,
-                    direction: Direction::Response
-                },
-                LIMITS
-            )
-            .unwrap(),
-            Ok(())
-        );
+        assert_eq!(wire_frame::response::<Result<(), u8>>(67, &reply), Ok(()));
     };
     let query = async |select: &str, minimum: Option<&str>| {
         let request = (
@@ -1900,28 +1534,12 @@ async fn decimal_aggregates_preserve_scale_rounding_and_upgrade_behavior() {
                 canister,
                 canister,
                 "query",
-                ic_wire::encode(
-                    &request,
-                    Encoding::Frame {
-                        method: 3,
-                        direction: Direction::Request,
-                    },
-                    LIMITS,
-                )
-                .unwrap(),
+                wire_frame::request(3, &request),
             )
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<DisplayPage, String>>(
-            &reply,
-            Encoding::Frame {
-                method: 3,
-                direction: Direction::Response,
-            },
-            LIMITS,
-        )
-        .unwrap()
+        wire_frame::response::<Result<DisplayPage, String>>(3, &reply)
     };
     write(vec!["1.25".into(), "2.50".into(), "-0.75".into()]).await;
     for upgraded in [false, true] {

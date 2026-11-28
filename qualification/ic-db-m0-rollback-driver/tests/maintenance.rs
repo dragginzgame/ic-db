@@ -1,5 +1,6 @@
 //! Executable admission and interrupted copy/cutover/cancellation against real Wasm.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -32,7 +33,7 @@ async fn identified_maintenance() {
                     canister,
                     canister,
                     "command",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &input,
                         Encoding::Frame {
                             method: 4,
@@ -45,7 +46,7 @@ async fn identified_maintenance() {
                 .await
                 .unwrap();
 
-            ic_wire::decode(
+            fixture_wire::decode(
                 &reply,
                 Encoding::Frame {
                     method: 4,
@@ -61,7 +62,7 @@ async fn identified_maintenance() {
                     canister,
                     canister,
                     "query",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &(after, 3_u64, minimum),
                         Encoding::Frame {
                             method: 3,
@@ -74,7 +75,7 @@ async fn identified_maintenance() {
                 .await
                 .unwrap();
 
-            ic_wire::decode(
+            fixture_wire::decode(
                 &reply,
                 Encoding::Frame {
                     method: 3,
@@ -91,7 +92,7 @@ async fn identified_maintenance() {
                     canister,
                     canister,
                     "command",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &(operation, 0_u64, 0_u64, boundary),
                         Encoding::Frame {
                             method: 4,
@@ -118,7 +119,7 @@ async fn identified_maintenance() {
                 canister,
                 canister,
                 "capacity_step",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(start, width, failure),
                     Encoding::Frame {
                         method: 5,
@@ -134,7 +135,7 @@ async fn identified_maintenance() {
             let before = pic.get_stable_memory(canister).await;
             let reply = reuse(true, 8192, 0).await.unwrap();
             assert_eq!(
-                ic_wire::decode::<Result<(), u8>>(
+                fixture_wire::decode::<Result<(), u8>>(
                     &reply,
                     Encoding::Frame {
                         method: 5,
@@ -299,7 +300,7 @@ async fn identified_maintenance() {
                     canister,
                     canister,
                     "capacity_inspect",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &(id, offset),
                         Encoding::Frame {
                             method: 6,
@@ -311,7 +312,7 @@ async fn identified_maintenance() {
                 )
                 .await
                 .unwrap();
-            let result: Result<CapacityInspection, u8> = ic_wire::decode(
+            let result: Result<CapacityInspection, u8> = fixture_wire::decode(
                 &reply,
                 Encoding::Frame {
                     method: 6,
@@ -332,7 +333,7 @@ async fn identified_maintenance() {
             assert!(before == pic.get_stable_memory(canister).await);
             let reply = reuse(true, width, 0).await.unwrap();
             assert_eq!(
-                ic_wire::decode::<Result<(), u8>>(
+                fixture_wire::decode::<Result<(), u8>>(
                     &reply,
                     Encoding::Frame {
                         method: 5,
@@ -351,7 +352,7 @@ async fn identified_maintenance() {
             let before = pic.get_stable_memory(canister).await;
             let reply = reuse(true, width, 0).await.unwrap();
             assert_eq!(
-                ic_wire::decode::<Result<(), u8>>(
+                fixture_wire::decode::<Result<(), u8>>(
                     &reply,
                     Encoding::Frame {
                         method: 5,
@@ -371,7 +372,7 @@ async fn identified_maintenance() {
                 }
                 let reply = reuse(false, 0, 0).await.unwrap();
                 assert_eq!(
-                    ic_wire::decode::<Result<(), u8>>(
+                    fixture_wire::decode::<Result<(), u8>>(
                         &reply,
                         Encoding::Frame {
                             method: 5,

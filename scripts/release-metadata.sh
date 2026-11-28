@@ -23,6 +23,11 @@ render_macro_pin() {
         else error("expected one macro pin matching the previous release") end' "$1"
 }
 
+render_release_lock() {
+    "$CARGO_RELEASE_METADATA_EDITOR" --max-input-bytes "$CARGO_RELEASE_METADATA_MAX_BYTES" \
+        lock "$1" "$RELEASE_PREVIOUS" "$RELEASE_VERSION" ic-db ic-db-macros ic-db-cli
+}
+
 render_release_metadata() {
     local original="$1" candidate="$2" evidence="${2%/*}" lock
     cargo metadata --locked --format-version 1 --no-deps > "$evidence/metadata.json" || return
@@ -36,9 +41,7 @@ render_release_metadata() {
         "$evidence/workspace-input.json" > "$candidate/Cargo.toml" || return
     render_macro_pin "$original/$pin_file" "$candidate/Cargo.toml" > "$candidate/$pin_file" || return
     for lock in Cargo.lock qualification/Cargo.lock; do
-        "$CARGO_RELEASE_METADATA_EDITOR" --max-input-bytes "$CARGO_RELEASE_METADATA_MAX_BYTES" \
-            lock "$original/$lock" "$RELEASE_PREVIOUS" "$RELEASE_VERSION" \
-            ic-db ic-db-macros ic-db-cli > "$candidate/$lock" || return
+        render_release_lock "$original/$lock" > "$candidate/$lock" || return
     done
     awk -v version="$RELEASE_VERSION" -v previous="$RELEASE_PREVIOUS" -v date="$RELEASE_DATE" \
         -f "$shared/finalize-release-changelog.awk" "$original/CHANGELOG.md" > "$candidate/CHANGELOG.md"
@@ -50,9 +53,7 @@ check_local_release_metadata() (
     evidence="$(mktemp -d "${TMPDIR:-/tmp}/ic-db-release-check.XXXXXX")"
     trap 'status=$?; if [[ "$status" == 0 ]]; then rm -rf -- "$evidence"; else printf "Release metadata evidence: %s\n" "$evidence" >&2; fi' EXIT
     git show "$RELEASE_SOURCE:qualification/Cargo.lock" > "$evidence/original.lock" || return
-    "$CARGO_RELEASE_METADATA_EDITOR" --max-input-bytes "$CARGO_RELEASE_METADATA_MAX_BYTES" \
-        lock "$evidence/original.lock" "$RELEASE_PREVIOUS" "$RELEASE_VERSION" \
-        ic-db ic-db-macros ic-db-cli > "$evidence/expected.lock" || return
+    render_release_lock "$evidence/original.lock" > "$evidence/expected.lock" || return
     if [[ -n "${RELEASE_COMMIT:-}" ]]; then
         git show "$RELEASE_COMMIT:qualification/Cargo.lock" > "$evidence/actual.lock" || return
     else

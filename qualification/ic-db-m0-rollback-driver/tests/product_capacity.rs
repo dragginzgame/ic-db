@@ -3,6 +3,7 @@
 mod envelope_support;
 mod wire_call;
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 use std::collections::BTreeMap;
@@ -26,7 +27,7 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
                 canister,
                 canister,
                 "migration_capacity",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &((second, op), first, limit, bytes, deny, stop),
                     Encoding::Frame {
                         method: 140,
@@ -41,7 +42,7 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
     let call =
         |op, first, limit, bytes, deny, stop| migration(false, op, first, limit, bytes, deny, stop);
     let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Reply>(
+        fixture_wire::decode::<Reply>(
             &bytes,
             Encoding::Frame {
                 method: 140,
@@ -250,7 +251,7 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
                     canister,
                     canister,
                     "migration_capacity_raw",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &(second, after.clone()),
                         Encoding::Frame {
                             method: 141,
@@ -262,7 +263,7 @@ async fn bounded_migration_retries_real_growth_refusal_and_finishes_validation_c
                 )
                 .await
                 .unwrap();
-            let (rows, next): RawPage = ic_wire::decode(
+            let (rows, next): RawPage = fixture_wire::decode(
                 &reply,
                 Encoding::Frame {
                     method: 141,

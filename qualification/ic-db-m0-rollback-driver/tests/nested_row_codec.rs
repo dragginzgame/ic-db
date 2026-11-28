@@ -1,7 +1,8 @@
 //! One fixed recursive row witnesses the compiled storage traversal contract.
 //! No schema interpreter, generated codec or general container engine lives here.
 
-use ic_wire::{Encoding, Limits};
+// The original M0 positional codec candidate has frozen byte vectors.
+use ic_wire_positional::{self as wire, Encoding, Limits};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -152,7 +153,7 @@ fn encode(row: &Row) -> Result<Vec<u8>, Refusal> {
     row_bounds(&counters, row.note.as_deref(), &tags)?;
     let root = encode_node(&row.root, 1, &mut 8)?;
 
-    ic_wire::encode(
+    wire::encode(
         &(counters, row.id, row.note.clone(), root, tags),
         Encoding::Payload,
         LIMITS,
@@ -162,7 +163,7 @@ fn encode(row: &Row) -> Result<Vec<u8>, Refusal> {
 
 fn decode(bytes: &[u8], limits: Limits) -> Result<Row, Refusal> {
     let (counters, id, note, root, tags): StoredRow =
-        ic_wire::decode(bytes, Encoding::Payload, limits).map_err(|_| Refusal::Codec)?;
+        wire::decode(bytes, Encoding::Payload, limits).map_err(|_| Refusal::Codec)?;
     row_bounds(&counters, note.as_deref(), &tags)?;
 
     Ok(Row {
@@ -266,7 +267,7 @@ fn recursive_values_obey_database_bounds_in_both_directions() {
     }
     assert_eq!(encode(&row), Err(Refusal::Bound));
     let mut stored: StoredRow =
-        ic_wire::decode(&encode(&valid).unwrap(), Encoding::Payload, LIMITS).unwrap();
+        wire::decode(&encode(&valid).unwrap(), Encoding::Payload, LIMITS).unwrap();
     stored.3.children[0].children[0].children.push(StoredNode {
         children: vec![],
         label: "too deep".into(),
@@ -274,7 +275,7 @@ fn recursive_values_obey_database_bounds_in_both_directions() {
     });
     assert_eq!(
         decode(
-            &ic_wire::encode(&stored, Encoding::Payload, LIMITS).unwrap(),
+            &wire::encode(&stored, Encoding::Payload, LIMITS).unwrap(),
             LIMITS
         ),
         Err(Refusal::Bound)
@@ -284,13 +285,13 @@ fn recursive_values_obey_database_bounds_in_both_directions() {
 #[test]
 fn malformed_collections_and_variants_are_not_silently_repaired() {
     let stored: StoredRow =
-        ic_wire::decode(&encode(&sample()).unwrap(), Encoding::Payload, LIMITS).unwrap();
+        wire::decode(&encode(&sample()).unwrap(), Encoding::Payload, LIMITS).unwrap();
     for keys in [vec!["x", "x"], vec!["z", "a"]] {
         let mut bad = stored.clone();
         bad.0 = keys.iter().map(|key| ((*key).into(), 1)).collect();
         assert_eq!(
             decode(
-                &ic_wire::encode(&bad, Encoding::Payload, LIMITS).unwrap(),
+                &wire::encode(&bad, Encoding::Payload, LIMITS).unwrap(),
                 LIMITS
             ),
             Err(Refusal::CollectionOrder)
@@ -299,7 +300,7 @@ fn malformed_collections_and_variants_are_not_silently_repaired() {
         bad.4 = keys.into_iter().map(String::from).collect();
         assert_eq!(
             decode(
-                &ic_wire::encode(&bad, Encoding::Payload, LIMITS).unwrap(),
+                &wire::encode(&bad, Encoding::Payload, LIMITS).unwrap(),
                 LIMITS
             ),
             Err(Refusal::CollectionOrder)
@@ -310,7 +311,7 @@ fn malformed_collections_and_variants_are_not_silently_repaired() {
         bad.3.state = variant;
         assert_eq!(
             decode(
-                &ic_wire::encode(&bad, Encoding::Payload, LIMITS).unwrap(),
+                &wire::encode(&bad, Encoding::Payload, LIMITS).unwrap(),
                 LIMITS
             ),
             Err(Refusal::Variant)

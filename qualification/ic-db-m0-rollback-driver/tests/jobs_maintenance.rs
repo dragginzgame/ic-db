@@ -1,5 +1,6 @@
 //! Maintenance gates aggregate reads; independent job custody still permits cleanup.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -53,7 +54,7 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
                 canister,
                 canister,
                 "job_control",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(operation, handle, now, limit),
                     Encoding::Frame {
                         method: 112,
@@ -66,7 +67,7 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<u64, String>>(
+        fixture_wire::decode::<Result<u64, String>>(
             &reply,
             Encoding::Frame {
                 method: 112,
@@ -81,7 +82,7 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
             canister,
             canister,
             "maintenance_control",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(operation, vec![9_u8], trap),
                 Encoding::Frame {
                     method: 133,
@@ -94,7 +95,7 @@ async fn frozen_jobs_remain_cleanable_and_resume_only_after_supported_cancellati
         .await
     };
     let admitted = |reply: Vec<u8>| {
-        ic_wire::decode::<Result<(), String>>(
+        fixture_wire::decode::<Result<(), String>>(
             &reply,
             Encoding::Frame {
                 method: 133,
@@ -252,7 +253,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
                 canister,
                 canister,
                 "maintenance_whole_copy",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(operation, trap),
                     Encoding::Frame {
                         method: 138,
@@ -265,7 +266,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
             .await?;
 
         Ok::<_, ic_testkit::pocket_ic::RejectResponse>(
-            ic_wire::decode::<Result<(bool, Option<String>, Vec<(u64, u64, u128)>), String>>(
+            fixture_wire::decode::<Result<(bool, Option<String>, Vec<(u64, u64, u128)>), String>>(
                 &reply,
                 Encoding::Frame {
                     method: 138,
@@ -282,7 +283,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
                 canister,
                 canister,
                 "maintenance_job",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(operation, target, bytes, sequence, work),
                     Encoding::Frame {
                         method: 146,
@@ -295,7 +296,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<(Vec<u8>, u64, u64, u64, Option<u64>), String>>(
+        fixture_wire::decode::<Result<(Vec<u8>, u64, u64, u64, Option<u64>), String>>(
             &reply,
             Encoding::Frame {
                 method: 146,
@@ -311,7 +312,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
                 canister,
                 canister,
                 "job_control",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(operation, bytes, now, 1_u32),
                     Encoding::Frame {
                         method: 112,
@@ -324,7 +325,7 @@ async fn publication_invalidates_positions_but_preserves_independent_job_cleanup
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<u64, String>>(
+        fixture_wire::decode::<Result<u64, String>>(
             &reply,
             Encoding::Frame {
                 method: 112,

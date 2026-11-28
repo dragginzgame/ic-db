@@ -195,6 +195,30 @@ async fn distinct_keys_page_past_32_after_upgrade() {
 #[tokio::test]
 #[ignore = "requires the retained-console Wasm built from the v0.33.1 tag"]
 async fn distinct_jobs_resume_from_v0331_with_fresh_page_cursors() {
+    // This archived canister accepts positional frames from before Wire 0.33.
+    async fn old_call<T: serde::de::DeserializeOwned>(
+        pic: &ic_testkit::pocket_ic::nonblocking::PocketIc,
+        canister: ic_testkit::pocket_ic::CanisterId,
+        name: &str,
+        method: u64,
+        body: &impl serde::Serialize,
+    ) -> T {
+        use ic_wire_positional::{self as wire, Direction, Encoding};
+        let current = ic_db_m0_rollback_driver::LIMITS;
+        let limits = wire::Limits {
+            bytes: current.bytes,
+            allocation: current.allocation,
+            nodes: current.nodes,
+            depth: current.depth,
+        };
+        let frame = |direction| Encoding::Frame { method, direction };
+        let request = wire::encode(body, frame(Direction::Request), limits).unwrap();
+        let reply = pic
+            .update_call(canister, canister, name, request)
+            .await
+            .unwrap();
+        wire::decode(&reply, frame(Direction::Response), limits).unwrap()
+    }
     let old = std::fs::read(std::env::var_os("IC_DB_V0331_CONSOLE_WASM").unwrap()).unwrap();
     let new = ic_db_m0_rollback_driver::records_wasm();
     let owned = instance().await.unwrap();
@@ -216,10 +240,10 @@ async fn distinct_jobs_resume_from_v0331_with_fresh_page_cursors() {
     let mut saved = Vec::new();
     for work in [2_u32, 32] {
         let handle =
-            call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
+            old_call::<Result<Vec<u8>, String>>(pic, canister, "aggregate_start", 120, &selection)
                 .await
                 .unwrap();
-        let step = call::<Result<PreviousStep, String>>(
+        let step = old_call::<Result<PreviousStep, String>>(
             pic,
             canister,
             "aggregate_resume",

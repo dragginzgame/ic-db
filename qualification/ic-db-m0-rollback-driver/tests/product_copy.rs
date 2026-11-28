@@ -2,6 +2,7 @@
 
 mod wire_call;
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -34,7 +35,7 @@ async fn exercise(publish: bool) {
             canister,
             canister,
             "maintenance_copy",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(operation, limit, trap),
                 Encoding::Frame {
                     method: 135,
@@ -47,7 +48,7 @@ async fn exercise(publish: bool) {
         .await
     };
     let decode = |reply: Vec<u8>| {
-        ic_wire::decode::<Result<(u64, bool), String>>(
+        fixture_wire::decode::<Result<(u64, bool), String>>(
             &reply,
             Encoding::Frame {
                 method: 135,
@@ -63,7 +64,7 @@ async fn exercise(publish: bool) {
                 canister,
                 canister,
                 "maintenance_copy_entries",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &target,
                     Encoding::Frame {
                         method: 136,
@@ -76,7 +77,7 @@ async fn exercise(publish: bool) {
             .await
             .unwrap();
 
-        ic_wire::decode::<Entries>(
+        fixture_wire::decode::<Entries>(
             &reply,
             Encoding::Frame {
                 method: 136,
@@ -276,7 +277,7 @@ async fn managed_times_survive_copy_rollback_resume_and_cutover() {
             canister,
             canister,
             "maintenance_managed_copy",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(operation, trap),
                 Encoding::Frame {
                     method: 137,
@@ -290,7 +291,7 @@ async fn managed_times_survive_copy_rollback_resume_and_cutover() {
     };
     type Reply = (bool, Vec<(u64, String, i64, i64)>);
     let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<Reply, String>>(
+        fixture_wire::decode::<Result<Reply, String>>(
             &bytes,
             Encoding::Frame {
                 method: 137,
@@ -375,7 +376,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
             canister,
             canister,
             "maintenance_whole_copy",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(operation, trap),
                 Encoding::Frame {
                     method: 138,
@@ -389,7 +390,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
     };
     type Reply = (bool, Option<String>, Vec<(u64, u64, u128)>);
     let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<Reply, String>>(
+        fixture_wire::decode::<Result<Reply, String>>(
             &bytes,
             Encoding::Frame {
                 method: 138,
@@ -443,7 +444,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
                 canister,
                 canister,
                 "maintenance_copy",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(2_u8, 2_u8, false),
                     Encoding::Frame {
                         method: 135,
@@ -456,7 +457,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
             .await
             .unwrap();
         assert!(
-            ic_wire::decode::<Result<(u64, bool), String>>(
+            fixture_wire::decode::<Result<(u64, bool), String>>(
                 &reply,
                 Encoding::Frame {
                     method: 135,
@@ -537,7 +538,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
                 canister,
                 canister,
                 "maintenance_next_copy",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(operation, trap),
                     Encoding::Frame {
                         method: 139,
@@ -550,7 +551,7 @@ async fn whole_database_copy(invalid_reference: bool, cancel_second: bool) {
             .await
         };
         let decode_next = |bytes: Vec<u8>| {
-            ic_wire::decode::<Result<Reply, String>>(
+            fixture_wire::decode::<Result<Reply, String>>(
                 &bytes,
                 Encoding::Frame {
                     method: 139,

@@ -1,5 +1,6 @@
 //! Length-framed Principal identity through the real product and IC rollback.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
@@ -21,7 +22,7 @@ async fn principal_identity_pages_references_and_upgrade() {
             canister,
             canister,
             "principal_keys_write",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(mode, rows, trap),
                 Encoding::Frame {
                     method: 84,
@@ -34,7 +35,7 @@ async fn principal_identity_pages_references_and_upgrade() {
         .await
     };
     let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<(), u8>>(
+        fixture_wire::decode::<Result<(), u8>>(
             &bytes,
             Encoding::Frame {
                 method: 84,
@@ -50,7 +51,7 @@ async fn principal_identity_pages_references_and_upgrade() {
                 canister,
                 canister,
                 "principal_keys_page",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(after, limit, rank),
                     Encoding::Frame {
                         method: 85,
@@ -63,7 +64,7 @@ async fn principal_identity_pages_references_and_upgrade() {
             .await
             .unwrap();
 
-        ic_wire::decode::<Page>(
+        fixture_wire::decode::<Page>(
             &bytes,
             Encoding::Frame {
                 method: 85,

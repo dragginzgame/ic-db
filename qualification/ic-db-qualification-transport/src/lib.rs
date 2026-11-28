@@ -5,6 +5,7 @@ mod hooks;
 pub mod mixed;
 
 pub use hooks::*;
+pub use ic_db_cli::fixture_wire;
 
 use ic_wire::{Direction, Encoding, Error, Limits};
 use serde::{Serialize, de::DeserializeOwned};
@@ -25,7 +26,7 @@ const RESPONSE_LIMITS: Limits = REQUEST_LIMITS;
 /// # Errors
 /// Returns malformed or over-budget input for the endpoint's trapping policy.
 pub fn decode<T: DeserializeOwned, const ID: u64>(bytes: &[u8]) -> Result<T, Error> {
-    ic_wire::decode(
+    fixture_wire::decode(
         bytes,
         Encoding::Frame {
             method: ID,
@@ -40,7 +41,7 @@ pub fn decode<T: DeserializeOwned, const ID: u64>(bytes: &[u8]) -> Result<T, Err
 /// Returns encoding refusal for the endpoint's trapping policy.
 pub fn encode<T: Serialize, const ID: u64>(value: T) -> Result<Vec<u8>, Error> {
     // Trap after mutation so synchronous writes roll back with the message.
-    ic_wire::encode(
+    fixture_wire::encode(
         &value,
         Encoding::Frame {
             method: ID,

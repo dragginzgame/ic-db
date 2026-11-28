@@ -979,17 +979,9 @@ fn indexed_batch((rows, trap): (Vec<IndexedWrite>, bool)) -> Result<(), u8> {
             score,
             ..document.clone()
         };
-        if db.get::<IdentityRow>(id).unwrap().is_some() {
-            batch.replace(&identity).map_err(|_| 2)?;
-        } else {
-            batch.insert(&identity).map_err(|_| 2)?;
-        }
+        batch.upsert(&identity).map_err(|_| 2)?;
 
-        if db.get::<Document>(id).unwrap().is_some() {
-            batch.replace(&changed).map_err(|_| 2)?;
-        } else {
-            batch.insert(&changed).map_err(|_| 2)?;
-        }
+        batch.upsert(&changed).map_err(|_| 2)?;
     }
     db.commit(batch).map_err(|_| 3)?;
     if trap {
@@ -1061,11 +1053,7 @@ fn text_index_batch((rows, trap): (Vec<(u64, String, bool)>, bool)) -> Result<()
             ..template.clone()
         };
 
-        if db.get::<Document>(id).unwrap().is_some() {
-            batch.replace(&row).map_err(|_| 1)?;
-        } else {
-            batch.insert(&row).map_err(|_| 1)?;
-        }
+        batch.upsert(&row).map_err(|_| 1)?;
     }
     db.commit(batch).map_err(|_| 2)?;
     if trap {
@@ -1135,18 +1123,8 @@ fn optional_index_batch((rows, trap): (OptionalWrites, bool)) -> Result<(), u8> 
             priority,
             ..template.clone()
         };
-        if db.get::<IdentityRow>(id).unwrap().is_some() {
-            batch.replace(&identity)
-        } else {
-            batch.insert(&identity)
-        }
-        .map_err(|_| 2)?;
-        if db.get::<Document>(id).unwrap().is_some() {
-            batch.replace(&document)
-        } else {
-            batch.insert(&document)
-        }
-        .map_err(|_| 2)?;
+        batch.upsert(&identity).map_err(|_| 2)?;
+        batch.upsert(&document).map_err(|_| 2)?;
     }
     db.commit(batch).map_err(|_| 3)?;
     if trap {
@@ -1219,12 +1197,7 @@ fn optional_reference_batch(
     }
     for (id, next) in rows {
         let row = OptionalLink { id, next };
-        if db.get::<OptionalLink>(id).unwrap().is_some() {
-            batch.replace(&row)
-        } else {
-            batch.insert(&row)
-        }
-        .map_err(|_| 1)?;
+        batch.upsert(&row).map_err(|_| 1)?;
     }
     db.commit(batch).map_err(|_| 2)?;
     if trap {
@@ -1773,12 +1746,7 @@ fn u256_batch((rows, trap): (Vec<WideRow>, bool)) -> Result<(), u8> {
             value: ic_db::U256::from_be_bytes(value),
             zone: true,
         };
-        if db.get::<BigNumbers>(id).map_err(|_| 1_u8)?.is_some() {
-            batch.replace(&row)
-        } else {
-            batch.insert(&row)
-        }
-        .map_err(|_| 1_u8)?;
+        batch.upsert(&row).map_err(|_| 1_u8)?;
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
@@ -1786,6 +1754,18 @@ fn u256_batch((rows, trap): (Vec<WideRow>, bool)) -> Result<(), u8> {
     }
 
     Ok(())
+}
+
+fn scalar_rows<E: Entity<Key = u64>>(index: &str) -> (Vec<(u64, Vec<u8>)>, u64) {
+    let host = runtime();
+    let db = open(&host);
+    let rows = db
+        .index_prefix::<E>(index, &[true.into()], 32)
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.id().key(), row.encode().unwrap()))
+        .collect();
+    (rows, db.revision::<E>().unwrap())
 }
 
 // u256_rows
@@ -1802,18 +1782,7 @@ fn u256_batch((rows, trap): (Vec<WideRow>, bool)) -> Result<(), u8> {
     on_error = crate::transport::endpoint_error
 )]
 fn u256_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
-    use schema::BigNumbers;
-    let host = runtime();
-    let db = open(&host);
-
-    (
-        db.index_prefix::<BigNumbers>("zone,value,id", &[true.into()], 32)
-            .unwrap()
-            .into_iter()
-            .map(|row| (row.id, row.encode().unwrap()))
-            .collect(),
-        db.revision::<BigNumbers>().unwrap(),
-    )
+    scalar_rows::<schema::BigNumbers>("zone,value,id")
 }
 
 // u256_lookup
@@ -1895,12 +1864,7 @@ fn float_batch((rows, trap): (Vec<FloatInput>, bool)) -> Result<(), u8> {
             small: Float32::try_new(f32::from_bits(small)).ok_or(1_u8)?,
             value: Float64::try_new(f64::from_bits(value)).ok_or(1_u8)?,
         };
-        if db.get::<FloatRow>(id).map_err(|_| 1_u8)?.is_some() {
-            batch.replace(&row)
-        } else {
-            batch.insert(&row)
-        }
-        .map_err(|_| 1_u8)?;
+        batch.upsert(&row).map_err(|_| 1_u8)?;
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
@@ -1924,23 +1888,12 @@ fn float_batch((rows, trap): (Vec<FloatInput>, bool)) -> Result<(), u8> {
     on_error = crate::transport::endpoint_error
 )]
 fn float_rows(small: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
-    use schema::FloatRow;
-    let host = runtime();
-    let db = open(&host);
     let index = if small {
         "zone,small,id"
     } else {
         "zone,value,id"
     };
-
-    (
-        db.index_prefix::<FloatRow>(index, &[true.into()], 32)
-            .unwrap()
-            .into_iter()
-            .map(|row| (row.id, row.encode().unwrap()))
-            .collect(),
-        db.revision::<FloatRow>().unwrap(),
-    )
+    scalar_rows::<schema::FloatRow>(index)
 }
 
 // float_lookup
@@ -2015,12 +1968,7 @@ fn account_batch((rows, trap): (Vec<AccountRowInput>, bool)) -> Result<(), u8> {
             value: admitted_account(value)?,
             zone: true,
         };
-        if db.get::<AccountRow>(id).map_err(|_| 1_u8)?.is_some() {
-            batch.replace(&row)
-        } else {
-            batch.insert(&row)
-        }
-        .map_err(|_| 1_u8)?;
+        batch.upsert(&row).map_err(|_| 1_u8)?;
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
@@ -2044,19 +1992,8 @@ fn account_batch((rows, trap): (Vec<AccountRowInput>, bool)) -> Result<(), u8> {
     on_error = crate::transport::endpoint_error
 )]
 fn account_rows(sub: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
-    use schema::AccountRow;
-    let host = runtime();
-    let db = open(&host);
     let index = if sub { "zone,sub,id" } else { "zone,value,id" };
-
-    (
-        db.index_prefix::<AccountRow>(index, &[true.into()], 32)
-            .unwrap()
-            .into_iter()
-            .map(|r| (r.id, r.encode().unwrap()))
-            .collect(),
-        db.revision::<AccountRow>().unwrap(),
-    )
+    scalar_rows::<schema::AccountRow>(index)
 }
 
 // account_lookup
@@ -2130,12 +2067,7 @@ fn ulid_batch((rows, trap): (Vec<UlidInput>, bool)) -> Result<(), u8> {
             value: ic_db::Ulid::from_bytes(value),
             zone: true,
         };
-        if db.get::<UlidRow>(id).map_err(|_| 1_u8)?.is_some() {
-            batch.replace(&row)
-        } else {
-            batch.insert(&row)
-        }
-        .map_err(|_| 1_u8)?;
+        batch.upsert(&row).map_err(|_| 1_u8)?;
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
@@ -2159,18 +2091,7 @@ fn ulid_batch((rows, trap): (Vec<UlidInput>, bool)) -> Result<(), u8> {
     on_error = crate::transport::endpoint_error
 )]
 fn ulid_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
-    use schema::UlidRow;
-    let host = runtime();
-    let db = open(&host);
-
-    (
-        db.index_prefix::<UlidRow>("zone,value,id", &[true.into()], 32)
-            .unwrap()
-            .into_iter()
-            .map(|row| (row.id, row.encode().unwrap()))
-            .collect(),
-        db.revision::<UlidRow>().unwrap(),
-    )
+    scalar_rows::<schema::UlidRow>("zone,value,id")
 }
 
 // ulid_lookup
@@ -2273,12 +2194,7 @@ fn date_batch((rows, trap): (Vec<DateInput>, bool)) -> Result<(), u8> {
             value: ic_db::Date::try_from_days_since_epoch(value).ok_or(1_u8)?,
             zone: true,
         };
-        if db.get::<DateRow>(id).map_err(|_| 1_u8)?.is_some() {
-            batch.replace(&row)
-        } else {
-            batch.insert(&row)
-        }
-        .map_err(|_| 1_u8)?;
+        batch.upsert(&row).map_err(|_| 1_u8)?;
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
@@ -2302,18 +2218,7 @@ fn date_batch((rows, trap): (Vec<DateInput>, bool)) -> Result<(), u8> {
     on_error = crate::transport::endpoint_error
 )]
 fn date_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
-    use schema::DateRow;
-    let host = runtime();
-    let db = open(&host);
-
-    (
-        db.index_prefix::<DateRow>("zone,value,id", &[true.into()], 32)
-            .unwrap()
-            .into_iter()
-            .map(|row| (row.id, row.encode().unwrap()))
-            .collect(),
-        db.revision::<DateRow>().unwrap(),
-    )
+    scalar_rows::<schema::DateRow>("zone,value,id")
 }
 
 // date_lookup
@@ -2397,12 +2302,7 @@ fn time_batch((rows, trap): (Vec<TimeInput>, bool)) -> Result<(), u8> {
             maybe: maybe.map(ic_db::Timestamp::from_millis),
             timestamp: ic_db::Timestamp::from_millis(timestamp),
         };
-        if db.get::<TimeRow>(id).map_err(|_| 1_u8)?.is_some() {
-            batch.replace(&row)
-        } else {
-            batch.insert(&row)
-        }
-        .map_err(|_| 1_u8)?;
+        batch.upsert(&row).map_err(|_| 1_u8)?;
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
@@ -2426,23 +2326,12 @@ fn time_batch((rows, trap): (Vec<TimeInput>, bool)) -> Result<(), u8> {
     on_error = crate::transport::endpoint_error
 )]
 fn time_rows(duration: bool) -> (Vec<(u64, Vec<u8>)>, u64) {
-    use schema::TimeRow;
-    let host = runtime();
-    let db = open(&host);
     let index = if duration {
         "zone,duration,id"
     } else {
         "zone,timestamp,id"
     };
-
-    (
-        db.index_prefix::<TimeRow>(index, &[true.into()], 32)
-            .unwrap()
-            .into_iter()
-            .map(|r| (r.id, r.encode().unwrap()))
-            .collect(),
-        db.revision::<TimeRow>().unwrap(),
-    )
+    scalar_rows::<schema::TimeRow>(index)
 }
 
 // time_decodes
@@ -2539,12 +2428,7 @@ fn decimal_batch((rows, trap): (Vec<DecimalInput>, bool)) -> Result<(), u8> {
             value: value.parse().map_err(|_| 1_u8)?,
             zone: true,
         };
-        if db.get::<DecimalRow>(id).map_err(|_| 1_u8)?.is_some() {
-            batch.replace(&row)
-        } else {
-            batch.insert(&row)
-        }
-        .map_err(|_| 1_u8)?;
+        batch.upsert(&row).map_err(|_| 1_u8)?;
     }
     db.commit(batch).map_err(|_| 2_u8)?;
     if trap {
@@ -2568,18 +2452,7 @@ fn decimal_batch((rows, trap): (Vec<DecimalInput>, bool)) -> Result<(), u8> {
     on_error = crate::transport::endpoint_error
 )]
 fn decimal_rows((): ()) -> (Vec<(u64, Vec<u8>)>, u64) {
-    use schema::DecimalRow;
-    let host = runtime();
-    let db = open(&host);
-
-    (
-        db.index_prefix::<DecimalRow>("zone,value,id", &[true.into()], 32)
-            .unwrap()
-            .into_iter()
-            .map(|r| (r.id, r.encode().unwrap()))
-            .collect(),
-        db.revision::<DecimalRow>().unwrap(),
-    )
+    scalar_rows::<schema::DecimalRow>("zone,value,id")
 }
 
 // decimal_decodes
@@ -2627,24 +2500,14 @@ fn key_batch((rows, links, deletes, numbered_deletes, trap): KeyBatchInput) -> R
             owner,
             value,
         };
-        if db.get::<KeyRow>(row.id).map_err(|_| 1_u8)?.is_some() {
-            batch.replace(&row)
-        } else {
-            batch.insert(&row)
-        }
-        .map_err(|_| 1_u8)?;
+        batch.upsert(&row).map_err(|_| 1_u8)?;
     }
     for (id, target) in links {
         let row = Numbered {
             id,
             target: target.map(ic_db::Ulid::from_bytes),
         };
-        if db.get::<Numbered>(id).map_err(|_| 1_u8)?.is_some() {
-            batch.replace(&row)
-        } else {
-            batch.insert(&row)
-        }
-        .map_err(|_| 1_u8)?;
+        batch.upsert(&row).map_err(|_| 1_u8)?;
     }
     for id in deletes {
         batch
@@ -2753,12 +2616,7 @@ fn integer_key_batch(
             peer: peer.map(ic_db::U256::from_be_bytes),
             rank,
         };
-        if db.get::<SignedKey>(id).map_err(|_| 1_u8)?.is_some() {
-            batch.replace(&row)
-        } else {
-            batch.insert(&row)
-        }
-        .map_err(|_| 1_u8)?;
+        batch.upsert(&row).map_err(|_| 1_u8)?;
     }
     for (id, peer, rank) in wide {
         let row = WideKey {
@@ -2766,12 +2624,7 @@ fn integer_key_batch(
             peer,
             rank,
         };
-        if db.get::<WideKey>(row.id).map_err(|_| 1_u8)?.is_some() {
-            batch.replace(&row)
-        } else {
-            batch.insert(&row)
-        }
-        .map_err(|_| 1_u8)?;
+        batch.upsert(&row).map_err(|_| 1_u8)?;
     }
     for id in delete_signed {
         batch.delete::<SignedKey>(id).map_err(|_| 1_u8)?;

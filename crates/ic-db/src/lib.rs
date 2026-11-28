@@ -403,9 +403,9 @@ pub mod __private {
     #[cfg(all(feature = "build", not(target_arch = "wasm32")))]
     pub use crate::build::{__build_schema, __canister, __ctor, __entity, __store};
     #[cfg(not(feature = "wire"))]
-    pub use ic_db_macros::__StorageOnly as Wire;
+    pub use ic_db_macros::__StorageOnly as WireSchema;
     #[cfg(feature = "wire")]
-    pub use ic_wire::{self, Wire};
+    pub use ic_wire::{self, WireSchema};
     pub use serde;
     /// Independent of the descriptor so references can form cycles.
     pub trait ReferenceTarget {

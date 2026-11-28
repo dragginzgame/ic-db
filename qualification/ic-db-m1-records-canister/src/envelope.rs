@@ -83,28 +83,6 @@ fn envelope_read(
     (ids, revision, counter() - start)
 }
 
-// envelope_row
-// Read the fixture’s four text fields by row ID.
-// guard  : validates the request frame for method 91.
-// limits : 64 KiB request, 64 KiB reply.
-#[ic_platform_runtime::query(
-    runtime = ic_platform_runtime,
-    name = "envelope_row",
-    guard = crate::transport::admit::<91>,
-    decode = crate::transport::decode::<_, 91>,
-    encode = crate::transport::encode::<_, 91>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn envelope_row(id: u64) -> (String, String, String, String) {
-    let host = runtime();
-    let db = open(&host);
-    let row = db.get::<EnvelopeRow>(id).unwrap().unwrap();
-    assert!(row.padding.is_empty());
-
-    (row.a, row.b, row.c, row.d)
-}
-
 // envelope_comparison_write
 // Measure the matched write workload at the requested text length.
 // guard  : validates the request frame for method 93.
@@ -130,39 +108,6 @@ fn envelope_comparison_write(
     };
 
     (result, counter() - start)
-}
-
-// envelope_listing
-// List matching fixture IDs for the requested generation.
-// guard  : validates the request frame for method 92.
-// limits : 64 KiB request, 64 KiB reply.
-#[ic_platform_runtime::query(
-    runtime = ic_platform_runtime,
-    name = "envelope_listing",
-    guard = crate::transport::admit::<92>,
-    decode = crate::transport::decode::<_, 92>,
-    encode = crate::transport::encode::<_, 92>,
-    max_bytes = 65_536,
-    on_error = crate::transport::endpoint_error
-)]
-fn envelope_listing(generation: u8) -> Vec<u64> {
-    assert!(generation <= 1);
-    let mut text = "\0".repeat(48);
-    if generation == 1 {
-        text.replace_range(..1, "\u{1}");
-    }
-    let host = runtime();
-    let db = open(&host);
-
-    db.index_prefix::<EnvelopeRow>(
-        EnvelopeRow::SCHEMA.indexes[0].name,
-        &[text.as_str().into()],
-        32,
-    )
-    .unwrap()
-    .into_iter()
-    .map(|row| row.id)
-    .collect()
 }
 
 // envelope_raw

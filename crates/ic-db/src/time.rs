@@ -36,10 +36,10 @@ impl Duration {
     pub const MAX: Self = Self(u64::MAX);
 
     const MS_PER_SEC: u64 = 1_000;
-    const SECS_PER_MIN: u64 = 60;
-    const MINS_PER_HOUR: u64 = 60;
-    const HOURS_PER_DAY: u64 = 24;
-    const DAYS_PER_WEEK: u64 = 7;
+    const MS_PER_MIN: u64 = 60 * Self::MS_PER_SEC;
+    const MS_PER_HOUR: u64 = 60 * Self::MS_PER_MIN;
+    const MS_PER_DAY: u64 = 24 * Self::MS_PER_HOUR;
+    const MS_PER_WEEK: u64 = 7 * Self::MS_PER_DAY;
 
     /// Construct from milliseconds.
     #[must_use]
@@ -78,46 +78,25 @@ impl Duration {
     /// Construct from minutes with saturation.
     #[must_use]
     pub const fn from_minutes(minutes: u64) -> Self {
-        Self(
-            minutes
-                .saturating_mul(Self::SECS_PER_MIN)
-                .saturating_mul(Self::MS_PER_SEC),
-        )
+        Self(minutes.saturating_mul(Self::MS_PER_MIN))
     }
 
     /// Construct from hours with saturation.
     #[must_use]
     pub const fn from_hours(hours: u64) -> Self {
-        Self(
-            hours
-                .saturating_mul(Self::MINS_PER_HOUR)
-                .saturating_mul(Self::SECS_PER_MIN)
-                .saturating_mul(Self::MS_PER_SEC),
-        )
+        Self(hours.saturating_mul(Self::MS_PER_HOUR))
     }
 
     /// Construct from days with saturation.
     #[must_use]
     pub const fn from_days(days: u64) -> Self {
-        Self(
-            days.saturating_mul(Self::HOURS_PER_DAY)
-                .saturating_mul(Self::MINS_PER_HOUR)
-                .saturating_mul(Self::SECS_PER_MIN)
-                .saturating_mul(Self::MS_PER_SEC),
-        )
+        Self(days.saturating_mul(Self::MS_PER_DAY))
     }
 
     /// Construct from weeks with saturation.
     #[must_use]
     pub const fn from_weeks(weeks: u64) -> Self {
-        Self(
-            weeks
-                .saturating_mul(Self::DAYS_PER_WEEK)
-                .saturating_mul(Self::HOURS_PER_DAY)
-                .saturating_mul(Self::MINS_PER_HOUR)
-                .saturating_mul(Self::SECS_PER_MIN)
-                .saturating_mul(Self::MS_PER_SEC),
-        )
+        Self(weeks.saturating_mul(Self::MS_PER_WEEK))
     }
 
     /// Return milliseconds.
@@ -135,30 +114,25 @@ impl Duration {
     /// Return whole minutes.
     #[must_use]
     pub const fn as_minutes(self) -> u64 {
-        self.0 / (Self::SECS_PER_MIN * Self::MS_PER_SEC)
+        self.0 / Self::MS_PER_MIN
     }
 
     /// Return whole hours.
     #[must_use]
     pub const fn as_hours(self) -> u64 {
-        self.0 / (Self::MINS_PER_HOUR * Self::SECS_PER_MIN * Self::MS_PER_SEC)
+        self.0 / Self::MS_PER_HOUR
     }
 
     /// Return whole days.
     #[must_use]
     pub const fn as_days(self) -> u64 {
-        self.0 / (Self::HOURS_PER_DAY * Self::MINS_PER_HOUR * Self::SECS_PER_MIN * Self::MS_PER_SEC)
+        self.0 / Self::MS_PER_DAY
     }
 
     /// Return whole weeks.
     #[must_use]
     pub const fn as_weeks(self) -> u64 {
-        self.0
-            / (Self::DAYS_PER_WEEK
-                * Self::HOURS_PER_DAY
-                * Self::MINS_PER_HOUR
-                * Self::SECS_PER_MIN
-                * Self::MS_PER_SEC)
+        self.0 / Self::MS_PER_WEEK
     }
 
     /// Parse integer milliseconds or `ms`, `s`, `m`, `h`, or `d` suffixes.
@@ -173,17 +147,11 @@ impl Duration {
         } else if let Some(value) = input.strip_suffix('s') {
             (value, Self::MS_PER_SEC)
         } else if let Some(value) = input.strip_suffix('m') {
-            (value, Self::SECS_PER_MIN * Self::MS_PER_SEC)
+            (value, Self::MS_PER_MIN)
         } else if let Some(value) = input.strip_suffix('h') {
-            (
-                value,
-                Self::MINS_PER_HOUR * Self::SECS_PER_MIN * Self::MS_PER_SEC,
-            )
+            (value, Self::MS_PER_HOUR)
         } else if let Some(value) = input.strip_suffix('d') {
-            (
-                value,
-                Self::HOURS_PER_DAY * Self::MINS_PER_HOUR * Self::SECS_PER_MIN * Self::MS_PER_SEC,
-            )
+            (value, Self::MS_PER_DAY)
         } else {
             (input, 1)
         };

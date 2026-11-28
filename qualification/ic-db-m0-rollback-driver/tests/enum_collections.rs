@@ -1,5 +1,6 @@
 //! Literal enum collection frames survive message rollback and upgrade.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -17,7 +18,7 @@ async fn enum_collections_preserve_bytes_and_atomicity() {
             canister,
             canister,
             "enum_collections",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(mode, bytes),
                 Encoding::Frame {
                     method: 94,
@@ -32,7 +33,7 @@ async fn enum_collections_preserve_bytes_and_atomicity() {
     // Reply order is Archived, Draft, Ready. Expected values below come
     // directly from the literal stored frames, independently of DB decoding.
     let membership = async || {
-        let request = ic_wire::encode(
+        let request = fixture_wire::encode(
             &(),
             Encoding::Frame {
                 method: 150,
@@ -46,7 +47,7 @@ async fn enum_collections_preserve_bytes_and_atomicity() {
             .await
             .unwrap();
 
-        ic_wire::decode::<[bool; 3]>(
+        fixture_wire::decode::<[bool; 3]>(
             &reply,
             Encoding::Frame {
                 method: 150,
@@ -57,7 +58,7 @@ async fn enum_collections_preserve_bytes_and_atomicity() {
         .unwrap()
     };
     let decode = |bytes: &[u8]| {
-        ic_wire::decode::<Result<(Vec<u8>, u64), u8>>(
+        fixture_wire::decode::<Result<(Vec<u8>, u64), u8>>(
             bytes,
             Encoding::Frame {
                 method: 94,

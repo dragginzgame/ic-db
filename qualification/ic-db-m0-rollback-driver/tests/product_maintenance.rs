@@ -1,5 +1,6 @@
 //! Real product manifest gate, exact executable identity and IC rollback boundary.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -40,7 +41,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
             canister,
             canister,
             "inspect",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(),
                 Encoding::Frame {
                     method: 1,
@@ -53,7 +54,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
         .await
     };
     let decode_status = |bytes: Vec<u8>| {
-        ic_wire::decode::<Status>(
+        fixture_wire::decode::<Status>(
             &bytes,
             Encoding::Frame {
                 method: 1,
@@ -70,7 +71,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
             canister,
             canister,
             "maintenance_control",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(operation, inputs, trap),
                 Encoding::Frame {
                     method: 133,
@@ -83,7 +84,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
         .await
     };
     let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<(), String>>(
+        fixture_wire::decode::<Result<(), String>>(
             &bytes,
             Encoding::Frame {
                 method: 133,
@@ -99,7 +100,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
                 canister,
                 canister,
                 "maintenance_source",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(after, rows, bytes),
                     Encoding::Frame {
                         method: 134,
@@ -112,7 +113,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<SourcePage, String>>(
+        fixture_wire::decode::<Result<SourcePage, String>>(
             &reply,
             Encoding::Frame {
                 method: 134,
@@ -166,7 +167,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
                 canister,
                 canister,
                 "write",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(1_u64, 1_u64, 99_u64, 0_u8),
                     Encoding::Frame {
                         method: 4,
@@ -209,7 +210,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
             canister,
             canister,
             "write",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(1_u64, 1_u64, 99_u64, 0_u8),
                 Encoding::Frame {
                     method: 4,
@@ -222,7 +223,7 @@ async fn freeze_resume_refusal_and_cancel_survive_traps_and_executable_changes()
         .await
         .unwrap();
     assert_eq!(
-        ic_wire::decode::<Result<(), u8>>(
+        fixture_wire::decode::<Result<(), u8>>(
             &reply,
             Encoding::Frame {
                 method: 4,

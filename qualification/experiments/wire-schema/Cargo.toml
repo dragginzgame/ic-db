@@ -15,11 +15,12 @@ ignored = ["toko-tooling"]
 category = "tests"
 
 [features]
-inspection = ["ic-db/wire"]
+inspection = ["ic-db/wire", "dep:ic-wire"]
 
 [dependencies]
 ic-db.workspace = true
-ic-wire = { workspace = true, features = ["derive"] }
+ic-wire = { workspace = true, optional = true }
+postcard.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]

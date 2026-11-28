@@ -1,5 +1,6 @@
 //! Execute the producer-owned schema for each separately built contract.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -15,7 +16,7 @@ async fn selected_schema_on_replica() {
         pic.install_canister(id, std::fs::read(path).unwrap(), vec![], None)
             .await;
         for (hub, size) in [(true, expected), (false, Some(1))] {
-            let request = ic_wire::encode(
+            let request = fixture_wire::encode(
                 &hub,
                 Encoding::Frame {
                     method: 1,
@@ -27,7 +28,7 @@ async fn selected_schema_on_replica() {
             let reply = pic.query_call(id, id, "schema_size", request).await;
 
             if let Some(size) = size {
-                let result: u64 = ic_wire::decode(
+                let result: u64 = fixture_wire::decode(
                     &reply.unwrap(),
                     Encoding::Frame {
                         method: 1,
@@ -68,7 +69,7 @@ async fn wide_store_on_replica() {
                 .await
                 .unwrap();
         }
-        let request = ic_wire::encode(
+        let request = fixture_wire::encode(
             &create,
             Encoding::Frame {
                 method: 1,
@@ -80,7 +81,7 @@ async fn wide_store_on_replica() {
         let before = pic.cycle_balance(id).await;
         let reply = pic.update_call(id, id, "exercise", request).await.unwrap();
         let cycles = before - pic.cycle_balance(id).await;
-        let (observed, work): (u64, [u64; 6]) = ic_wire::decode(
+        let (observed, work): (u64, [u64; 6]) = fixture_wire::decode(
             &reply,
             Encoding::Frame {
                 method: 1,

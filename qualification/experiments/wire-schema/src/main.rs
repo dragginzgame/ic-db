@@ -4,7 +4,8 @@
 use ic_db::design::prelude::*;
 #[cfg(feature = "inspection")]
 use ic_wire::typescript::Wire;
-use ic_wire::{Encoding, Limits};
+#[cfg(all(test, feature = "inspection"))]
+use ic_wire::{Encoding, Limits, Message};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -52,6 +53,7 @@ struct Profiles {}
 ))]
 struct User {}
 
+#[cfg(all(test, feature = "inspection"))]
 const LIMITS: Limits = Limits {
     bytes: 2048,
     allocation: 65536,
@@ -60,7 +62,7 @@ const LIMITS: Limits = Limits {
 };
 
 fn payload<T: Serialize>(value: &T) -> Vec<u8> {
-    ic_wire::encode(value, Encoding::Payload, LIMITS).unwrap()
+    postcard::to_allocvec(value).unwrap()
 }
 
 fn main() {
@@ -73,8 +75,17 @@ fn main() {
         };
         let expected = [bytes.as_slice(), &[tag]].concat();
         assert_eq!(payload(&request), expected);
+        #[cfg(all(test, feature = "inspection"))]
+        {
+            let message = ic_wire::encode(&request, Encoding::Payload, LIMITS).unwrap();
+            assert_eq!(message, [expected.as_slice(), &[0]].concat());
+            assert_eq!(
+                ic_wire::decode::<UserAdminRequest>(&message, Encoding::Payload, LIMITS).unwrap(),
+                request
+            );
+        }
         assert_eq!(
-            ic_wire::decode::<UserAdminRequest>(&expected, Encoding::Payload, LIMITS).unwrap(),
+            postcard::from_bytes::<UserAdminRequest>(&expected).unwrap(),
             request
         );
     }
@@ -94,10 +105,7 @@ fn main() {
     ]
     .concat();
     assert_eq!(payload(&user), expected);
-    assert_eq!(
-        ic_wire::decode::<User>(&expected, Encoding::Payload, LIMITS).unwrap(),
-        user
-    );
+    assert_eq!(postcard::from_bytes::<User>(&expected).unwrap(), user);
 }
 
 #[cfg(all(test, feature = "inspection"))]
@@ -130,21 +138,18 @@ mod tests {
             let bytes = payload(&principal);
             let owner = ProjectOwner::try_from(principal).unwrap();
             assert_eq!(payload(&owner), bytes);
-            assert_eq!(
-                ic_wire::decode::<ProjectOwner>(&bytes, Encoding::Payload, LIMITS).unwrap(),
-                owner
-            );
+            assert_eq!(postcard::from_bytes::<ProjectOwner>(&bytes).unwrap(), owner);
         }
         let bytes = payload(&Principal::anonymous());
-        assert!(ic_wire::decode::<ProjectOwner>(&bytes, Encoding::Payload, LIMITS).is_err());
+        assert!(postcard::from_bytes::<ProjectOwner>(&bytes).is_err());
         assert_eq!(
-            ic_wire::decode::<Principal>(&bytes, Encoding::Payload, LIMITS).unwrap(),
+            postcard::from_bytes::<Principal>(&bytes).unwrap(),
             Principal::anonymous()
         );
     }
 
     #[test]
-    fn opaque_cursor_resumes_from_the_existing_page_payload() {
+    fn opaque_cursor_resumes_through_a_generated_sparse_client() {
         use ic_db::{Batch, Entity, QueryCursor, Schema, testing::Fixture};
 
         let fixture = Fixture::new("test.cursor.v1");
@@ -184,9 +189,19 @@ mod tests {
                 allocation: 1 << 20,
                 ..LIMITS
             };
-            let encoded = ic_wire::encode(&Some(bad), Encoding::Payload, limits).unwrap();
+            let encoded = ic_wire::encode(
+                &Message(Some(ic_wire::ByteBuf::from(bad))),
+                Encoding::Payload,
+                limits,
+            )
+            .unwrap();
             assert!(
-                ic_wire::decode::<Option<Vec<u8>>>(&encoded, Encoding::Payload, limits).is_ok()
+                ic_wire::decode::<Message<Option<ic_wire::ByteBuf>>>(
+                    &encoded,
+                    Encoding::Payload,
+                    limits
+                )
+                .is_ok()
             );
             assert!(ic_wire::decode::<PageRequest>(&encoded, Encoding::Payload, limits).is_err());
         }
@@ -230,9 +245,14 @@ mod tests {
         let request = frame(ic_wire::Direction::Request);
         assert_eq!(
             ic_wire::encode(&PageRequest { after: None }, request, LIMITS).unwrap(),
-            ic_wire::encode(&None::<Vec<u8>>, request, LIMITS).unwrap()
+            ic_wire::encode(&Message(None::<Vec<u8>>), request, LIMITS).unwrap()
         );
-        let old_reply = ic_wire::encode(&(id, Some(cursor.to_bytes())), response, LIMITS).unwrap();
+        let byte_vector_reply = ic_wire::encode(
+            &Message((id, Some(ic_wire::ByteBuf::from(cursor.to_bytes())))),
+            response,
+            LIMITS,
+        )
+        .unwrap();
         let first_reply = ic_wire::encode(
             &PageReply {
                 id,
@@ -242,31 +262,27 @@ mod tests {
             LIMITS,
         )
         .unwrap();
-        assert_eq!(first_reply, old_reply);
-        // A sparse application envelope still carries the positional cursor leaf.
-        #[derive(ic_wire::Wire)]
-        #[wire(sparse)]
-        struct SparseRequest {
-            after: Option<QueryCursor>,
-        }
-        let sparse = SparseRequest {
-            after: Some(cursor.clone()),
-        };
-        let encoded = ic_wire::evolution::encode(&sparse, request, LIMITS).unwrap();
-        let decoded: SparseRequest = ic_wire::evolution::decode(&encoded, request, LIMITS).unwrap();
-        assert_eq!(decoded.after.as_ref(), Some(&cursor));
+        assert_eq!(first_reply, byte_vector_reply);
+        assert_eq!(first_reply.last(), Some(&0));
+        assert!(
+            ic_wire::decode::<PageReply>(&first_reply[..first_reply.len() - 1], response, LIMITS)
+                .is_err()
+        );
         let next_request = typescript_continue(&module, &first_reply);
         assert_eq!(
             next_request,
-            ic_wire::encode(&Some(cursor.to_bytes()), request, LIMITS).unwrap()
+            ic_wire::encode(
+                &Message(Some(ic_wire::ByteBuf::from(cursor.to_bytes()))),
+                request,
+                LIMITS
+            )
+            .unwrap()
         );
         let decoded: PageRequest = ic_wire::decode(&next_request, request, LIMITS).unwrap();
         let second = query().after(&decoded.after.unwrap()).fetch().unwrap();
         assert_eq!(second.rows[0].id, Ulid::from_u128(2));
         assert_eq!(second.rows.len(), 1);
-        assert!(
-            ic_wire::decode::<Option<QueryCursor>>(&[1, 50, 1], Encoding::Payload, LIMITS).is_err()
-        );
+        assert!(ic_wire::decode::<PageRequest>(&[1, 50, 1], Encoding::Payload, LIMITS).is_err());
     }
 
     fn typescript_continue(module: &str, reply: &[u8]) -> Vec<u8> {
@@ -305,10 +321,7 @@ mod tests {
             ),
         ] {
             assert_eq!(payload(&wide), payload(&hex));
-            assert_eq!(
-                ic_wire::decode::<U256>(&payload(&hex), Encoding::Payload, LIMITS).unwrap(),
-                wide
-            );
+            assert_eq!(postcard::from_bytes::<U256>(&payload(&hex)).unwrap(), wide);
         }
         assert_eq!(payload(&Date::EPOCH), payload(&0_i32));
         assert_eq!(payload(&Duration::from_millis(190)), payload(&190_u64));
@@ -431,7 +444,7 @@ mod checked_text {
             let bytes = payload(&text);
             assert_eq!(payload(&name), bytes);
             assert_eq!(
-                ic_wire::decode::<CollectionName>(&bytes, Encoding::Payload, LIMITS).unwrap(),
+                postcard::from_bytes::<CollectionName>(&bytes).unwrap(),
                 name
             );
             assert_eq!(String::from(name), text);
@@ -444,10 +457,7 @@ mod checked_text {
             "🌱".repeat(51),
         ] {
             assert!(CollectionName::try_from(text.clone()).is_err());
-            assert!(
-                ic_wire::decode::<CollectionName>(&payload(&text), Encoding::Payload, LIMITS)
-                    .is_err()
-            );
+            assert!(postcard::from_bytes::<CollectionName>(&payload(&text)).is_err());
         }
     }
 }

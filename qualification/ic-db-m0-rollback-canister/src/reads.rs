@@ -2,6 +2,7 @@
 //! Rows encode score * 65536 + price; score zero is the optional value None.
 
 use super::{NAMES, open, runtime};
+use crate::transport::fixture_wire;
 use ic_wire::{Direction, Encoding, Limits};
 use std::ops::Bound::{Excluded, Unbounded};
 
@@ -134,7 +135,7 @@ fn bounded_page(
     let make_cursor = |key| cursor(incarnation, order, maximum_price, key);
     // Reserve a complete progress envelope, including maximal counters/position.
     let reserve: Page<Row> = (vec![], Some(make_cursor(10008)), 8, 8);
-    if ic_wire::encode(
+    if fixture_wire::encode(
         &Ok::<_, u8>(reserve),
         Encoding::Frame {
             method: 6,
@@ -177,7 +178,7 @@ fn bounded_page(
         let mut proposed = output.clone();
         proposed.push(row);
         let page = (proposed, Some(make_cursor(key)), examined, examined);
-        if ic_wire::encode(
+        if fixture_wire::encode(
             &Ok::<_, u8>(&page),
             Encoding::Frame {
                 method: 6,
@@ -190,7 +191,7 @@ fn bounded_page(
             > bytes
         {
             let single = (vec![row], Some(make_cursor(key)), examined, examined);
-            if ic_wire::encode(
+            if fixture_wire::encode(
                 &Ok::<_, u8>(single),
                 Encoding::Frame {
                     method: 6,

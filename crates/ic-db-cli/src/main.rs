@@ -8,6 +8,7 @@ mod terminal;
 mod tests;
 
 use clap::{CommandFactory, Parser, Subcommand};
+use ic_db_cli::fixture_wire;
 use ic_db_cli::host::{LIMITS, instance};
 use ic_db_cli::{
     ComparisonFilter, ConsolePage, DisplayPage, EntityFilters, EntityView, FieldRange, FieldView,
@@ -116,13 +117,13 @@ impl FixtureCalls<'_> {
             method: id,
             direction,
         };
-        let payload = ic_wire::encode(request, frame(Direction::Request), LIMITS)
+        let payload = fixture_wire::encode(request, frame(Direction::Request), LIMITS)
             .map_err(|e| e.to_string())?;
         let reply = self
             .invoke(kind, method, payload)
             .await
             .map_err(|e| format!("{e:?}"))?;
-        ic_wire::decode(&reply, frame(Direction::Response), LIMITS).map_err(|e| e.to_string())
+        fixture_wire::decode(&reply, frame(Direction::Response), LIMITS).map_err(|e| e.to_string())
     }
 }
 

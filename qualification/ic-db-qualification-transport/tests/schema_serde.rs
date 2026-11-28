@@ -2,6 +2,7 @@
 
 use ic_db::design::prelude::*;
 
+use ic_db_cli::fixture_wire;
 use ic_wire::{Encoding, Limits};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -13,25 +14,26 @@ const LIMITS: Limits = Limits {
 };
 
 fn encode<T: Serialize>(value: &T) -> Vec<u8> {
-    ic_wire::encode(value, Encoding::Payload, LIMITS).unwrap()
+    fixture_wire::encode(value, Encoding::Payload, LIMITS).unwrap()
 }
 
 fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, ic_wire::Error> {
-    ic_wire::decode(bytes, Encoding::Payload, LIMITS)
+    fixture_wire::decode(bytes, Encoding::Payload, LIMITS)
 }
 
 #[test]
-fn bare_ulid_accepts_the_existing_fixed_array_endpoint_payload() {
+fn ulid_uses_a_fixed_array_inside_a_sparse_endpoint_payload() {
     let bytes = std::array::from_fn(|i| (i * 17) as u8);
     let id = Ulid::from_bytes(bytes);
     #[entity(store = crate::TestStore, pk(field = "id"), fields(field(name = "id", value(item(prim = "Ulid")))))]
     struct Profile {}
 
     let branded = ic_db::Id::<Profile>::from_key(id);
-    assert_eq!(encode(&branded), bytes);
-    assert_eq!(decode::<ic_db::Id<Profile>>(&bytes).unwrap(), branded);
+    let payload = [bytes.as_slice(), &[0]].concat();
+    assert_eq!(encode(&branded), payload);
+    assert_eq!(decode::<ic_db::Id<Profile>>(&payload).unwrap(), branded);
     assert_eq!(serde_json::to_value(branded).unwrap(), id.to_string());
-    assert_eq!(encode(&id), bytes);
+    assert_eq!(encode(&id), payload);
     assert_eq!(decode::<Ulid>(&encode(&bytes)).unwrap(), id);
     assert_eq!(decode::<[u8; 16]>(&encode(&id)).unwrap(), bytes);
     assert!(decode::<Ulid>(&bytes[..15]).is_err());
@@ -113,9 +115,9 @@ fn wire_and_row_codecs_choose_their_own_timestamp_bytes() {
         time: Timestamp::from_millis(1),
     };
     let stored = [7, 1, 0, 0, 0, 0, 0, 0, 0];
-    assert_eq!(encode(&event), [7, 2]); // Wire signed varint.
+    assert_eq!(encode(&event), [7, 2, 0]); // Signed varint and empty extensions.
     assert_eq!(event.encode().unwrap(), stored);
-    assert_eq!(decode::<Event>(&[7, 2]).unwrap(), event);
+    assert_eq!(decode::<Event>(&[7, 2, 0]).unwrap(), event);
     assert_eq!(Event::decode(&stored).unwrap(), event);
 }
 

@@ -1,4 +1,5 @@
 use super::{Command, FilterArgs, charged_cycles, parse_console_line};
+use ic_db_cli::fixture_wire;
 
 #[test]
 fn unknown_comparison_is_rejected_while_building_the_request() {
@@ -36,8 +37,8 @@ fn named_payload_filters_keep_their_wire_positions() {
         direction: ic_wire::Direction::Request,
     };
     assert_eq!(
-        ic_wire::encode(&filters, frame(), super::LIMITS).unwrap(),
-        ic_wire::encode(&previous, frame(), super::LIMITS).unwrap(),
+        fixture_wire::encode(&filters, frame(), super::LIMITS).unwrap(),
+        fixture_wire::encode(&previous, frame(), super::LIMITS).unwrap(),
     );
 }
 

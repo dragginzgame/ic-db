@@ -1,5 +1,6 @@
 //! Managed field/index/revision behavior across real IC execution and upgrades.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -19,7 +20,7 @@ async fn managed_times_follow_batch_change_and_message_boundaries() {
             canister,
             canister,
             "managed_write",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(id, body.to_string(), time, mode, trap),
                 Encoding::Frame {
                     method: 82,
@@ -32,7 +33,7 @@ async fn managed_times_follow_batch_change_and_message_boundaries() {
         .await
     };
     let decode = |bytes: Vec<u8>| {
-        ic_wire::decode::<Result<(), u8>>(
+        fixture_wire::decode::<Result<(), u8>>(
             &bytes,
             Encoding::Frame {
                 method: 82,
@@ -48,7 +49,7 @@ async fn managed_times_follow_batch_change_and_message_boundaries() {
                 canister,
                 canister,
                 "managed_rows",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &time,
                     Encoding::Frame {
                         method: 83,
@@ -61,7 +62,7 @@ async fn managed_times_follow_batch_change_and_message_boundaries() {
             .await
             .unwrap();
 
-        ic_wire::decode::<State>(
+        fixture_wire::decode::<State>(
             &bytes,
             Encoding::Frame {
                 method: 83,

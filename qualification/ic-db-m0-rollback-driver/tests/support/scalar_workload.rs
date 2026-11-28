@@ -1,5 +1,6 @@
 //! One fixed scalar workload and independent tuple oracle for both engines.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -102,7 +103,7 @@ pub async fn run(
                     canister,
                     canister,
                     "advance_startup",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &(),
                         Encoding::Frame {
                             method: 1,
@@ -114,7 +115,7 @@ pub async fn run(
                 )
                 .await
                 .unwrap();
-            let (ready, work): (bool, u64) = ic_wire::decode(
+            let (ready, work): (bool, u64) = fixture_wire::decode(
                 &reply,
                 Encoding::Frame {
                     method: 1,
@@ -151,7 +152,7 @@ pub async fn run(
                 canister,
                 canister,
                 "insert",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &value,
                     Encoding::Frame {
                         method: 2,
@@ -163,7 +164,7 @@ pub async fn run(
             )
             .await
             .unwrap();
-        let (accepted, _): (bool, u64) = ic_wire::decode(
+        let (accepted, _): (bool, u64) = fixture_wire::decode(
             &reply,
             Encoding::Frame {
                 method: 2,
@@ -182,7 +183,7 @@ pub async fn run(
                 canister,
                 canister,
                 "read_modify_write",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &replacement,
                     Encoding::Frame {
                         method: 4,
@@ -197,7 +198,7 @@ pub async fn run(
         let cycles = before
             .checked_sub(pic.cycle_balance(canister).await)
             .unwrap();
-        let (value, instructions): (Option<Row>, u64) = ic_wire::decode(
+        let (value, instructions): (Option<Row>, u64) = fixture_wire::decode(
             &reply,
             Encoding::Frame {
                 method: 4,
@@ -215,7 +216,7 @@ pub async fn run(
                 canister,
                 canister,
                 "lookup",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &id,
                     Encoding::Frame {
                         method: 3,
@@ -228,7 +229,7 @@ pub async fn run(
             .await
             .unwrap();
 
-        ic_wire::decode::<(Option<Row>, u64)>(
+        fixture_wire::decode::<(Option<Row>, u64)>(
             &reply,
             Encoding::Frame {
                 method: 3,
@@ -244,7 +245,7 @@ pub async fn run(
                 canister,
                 canister,
                 "listing",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &category,
                     Encoding::Frame {
                         method: 5,
@@ -257,7 +258,7 @@ pub async fn run(
             .await
             .unwrap();
 
-        ic_wire::decode::<(Vec<Row>, u64)>(
+        fixture_wire::decode::<(Vec<Row>, u64)>(
             &reply,
             Encoding::Frame {
                 method: 5,
@@ -297,18 +298,18 @@ pub async fn run(
                 direction: Direction::Request,
             };
             let request = if label == "ic-db" {
-                ic_wire::encode(&(after, category, hinted), encoding, LIMITS)
+                fixture_wire::encode(&(after, category, hinted), encoding, LIMITS)
             } else {
                 assert!(!hinted);
 
-                ic_wire::encode(&(after, category), encoding, LIMITS)
+                fixture_wire::encode(&(after, category), encoding, LIMITS)
             }
             .unwrap();
             let reply = pic
                 .query_call(canister, canister, "keyset_listing", request)
                 .await
                 .unwrap();
-            let (rows, instructions): (Vec<Row>, u64) = ic_wire::decode(
+            let (rows, instructions): (Vec<Row>, u64) = fixture_wire::decode(
                 &reply,
                 Encoding::Frame {
                     method: 11,
@@ -475,7 +476,7 @@ pub async fn run(
                     canister,
                     canister,
                     "fluent_listing",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &(mode, category, minimum, limit),
                         Encoding::Frame {
                             method: 6,
@@ -487,7 +488,7 @@ pub async fn run(
                 )
                 .await
                 .unwrap();
-            let (result, instructions): (Result<Vec<Row>, u16>, u64) = ic_wire::decode(
+            let (result, instructions): (Result<Vec<Row>, u16>, u64) = fixture_wire::decode(
                 &reply,
                 Encoding::Frame {
                     method: 6,
@@ -552,7 +553,7 @@ pub async fn run(
                         canister,
                         canister,
                         "grouped_aggregate",
-                        ic_wire::encode(
+                        fixture_wire::encode(
                             &(operation, category, minimum),
                             Encoding::Frame {
                                 method: 7,
@@ -564,7 +565,7 @@ pub async fn run(
                     )
                     .await
                     .unwrap();
-                let (result, instructions): (Vec<(u64, u64)>, u64) = ic_wire::decode(
+                let (result, instructions): (Vec<(u64, u64)>, u64) = fixture_wire::decode(
                     &reply,
                     Encoding::Frame {
                         method: 7,
@@ -590,7 +591,7 @@ pub async fn run(
                 canister,
                 canister,
                 "count_profile",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(mode, operand),
                     Encoding::Frame {
                         method: 9,
@@ -603,7 +604,7 @@ pub async fn run(
             .await
             .unwrap();
 
-        ic_wire::decode::<(Option<u64>, u64, u64)>(
+        fixture_wire::decode::<(Option<u64>, u64, u64)>(
             &reply,
             Encoding::Frame {
                 method: 9,
@@ -628,7 +629,7 @@ pub async fn run(
                     canister,
                     canister,
                     "count_rows",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &category,
                         Encoding::Frame {
                             method: 8,
@@ -640,7 +641,7 @@ pub async fn run(
                 )
                 .await
                 .unwrap();
-            let (result, instructions): (Option<u64>, u64) = ic_wire::decode(
+            let (result, instructions): (Option<u64>, u64) = fixture_wire::decode(
                 &reply,
                 Encoding::Frame {
                     method: 8,

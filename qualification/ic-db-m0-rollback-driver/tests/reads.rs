@@ -1,5 +1,6 @@
 //! Independent complete-sort/projection oracles for bounded live reads and ordered DISTINCT.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -24,7 +25,7 @@ async fn bounded_reads() {
                 canister,
                 canister,
                 "seed_reads",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(),
                     Encoding::Frame {
                         method: 4,
@@ -37,7 +38,7 @@ async fn bounded_reads() {
             .await
             .unwrap();
 
-        ic_wire::decode(
+        fixture_wire::decode(
             &reply,
             Encoding::Frame {
                 method: 4,
@@ -53,7 +54,7 @@ async fn bounded_reads() {
                 canister,
                 canister,
                 "bounded_page",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &request,
                     Encoding::Frame {
                         method: 6,
@@ -67,7 +68,7 @@ async fn bounded_reads() {
             .unwrap();
 
         (
-            ic_wire::decode(
+            fixture_wire::decode(
                 &reply,
                 Encoding::Frame {
                     method: 6,
@@ -85,7 +86,7 @@ async fn bounded_reads() {
                 canister,
                 canister,
                 "distinct_page",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(token, 1_u64, 1_u64),
                     Encoding::Frame {
                         method: 7,
@@ -98,7 +99,7 @@ async fn bounded_reads() {
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Page<Option<u64>>, u8>>(
+        fixture_wire::decode::<Result<Page<Option<u64>>, u8>>(
             &reply,
             Encoding::Frame {
                 method: 7,
@@ -115,7 +116,7 @@ async fn bounded_reads() {
                 canister,
                 canister,
                 "change_read_row",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(id, value),
                     Encoding::Frame {
                         method: 5,
@@ -128,7 +129,7 @@ async fn bounded_reads() {
             .await
             .unwrap();
         assert_eq!(
-            ic_wire::decode::<Result<(), u8>>(
+            fixture_wire::decode::<Result<(), u8>>(
                 &reply,
                 Encoding::Frame {
                     method: 5,
@@ -289,7 +290,7 @@ async fn bounded_reads() {
         other,
         other,
         "seed_reads",
-        ic_wire::encode(
+        fixture_wire::encode(
             &(),
             Encoding::Frame {
                 method: 4,
@@ -306,7 +307,7 @@ async fn bounded_reads() {
             other,
             other,
             "bounded_page",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &(
                     0_u64,
                     0_u64,
@@ -327,7 +328,7 @@ async fn bounded_reads() {
         .await
         .unwrap();
     assert_eq!(
-        ic_wire::decode::<Result<Page<Row>, u8>>(
+        fixture_wire::decode::<Result<Page<Row>, u8>>(
             &reply,
             Encoding::Frame {
                 method: 6,

@@ -1,5 +1,6 @@
 //! Cross-chunk migration integrity; literal row/index bytes remain independent.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 use std::collections::BTreeMap;
@@ -69,7 +70,7 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
                 canister,
                 canister,
                 "migration_references",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(operation, first, limit, bad, stop),
                     Encoding::Frame {
                         method: 144,
@@ -82,7 +83,7 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
             .await
         };
         let decode = |reply: Vec<u8>| {
-            ic_wire::decode::<Reply>(
+            fixture_wire::decode::<Reply>(
                 &reply,
                 Encoding::Frame {
                     method: 144,
@@ -101,7 +102,7 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
                         canister,
                         canister,
                         "migration_references_raw",
-                        ic_wire::encode(
+                        fixture_wire::encode(
                             &(target, &after),
                             Encoding::Frame {
                                 method: 145,
@@ -113,7 +114,7 @@ async fn cross_chunk_references_validate_before_publication_and_cancel_safely() 
                     )
                     .await
                     .unwrap();
-                let (rows, next): RawPage = ic_wire::decode(
+                let (rows, next): RawPage = fixture_wire::decode(
                     &reply,
                     Encoding::Frame {
                         method: 145,

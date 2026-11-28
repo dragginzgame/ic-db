@@ -1,5 +1,6 @@
 //! Final-state batch constraints checked against independent complete row/index expectations.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -23,7 +24,7 @@ async fn final_state_batches() {
                 canister,
                 canister,
                 "batch",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(commands, 0_u8),
                     Encoding::Frame {
                         method: 3,
@@ -36,7 +37,7 @@ async fn final_state_batches() {
             .await
             .unwrap();
 
-        ic_wire::decode(
+        fixture_wire::decode(
             &reply,
             Encoding::Frame {
                 method: 3,
@@ -60,7 +61,7 @@ async fn final_state_batches() {
                 canister,
                 canister,
                 "inspect",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(),
                     Encoding::Frame {
                         method: 2,
@@ -72,7 +73,7 @@ async fn final_state_batches() {
             )
             .await
             .unwrap();
-        let snapshot: Snapshot = ic_wire::decode(
+        let snapshot: Snapshot = fixture_wire::decode(
             &reply,
             Encoding::Frame {
                 method: 2,
@@ -135,7 +136,7 @@ async fn final_state_batches() {
                 canister,
                 canister,
                 "batch",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(swap.clone(), boundary),
                     Encoding::Frame {
                         method: 3,
@@ -188,7 +189,7 @@ async fn final_state_batches() {
                 canister,
                 canister,
                 "batch",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(transfer.clone(), boundary),
                     Encoding::Frame {
                         method: 3,

@@ -24,7 +24,7 @@ ic-metrics = { version = "0.30.23", default-features = false }
 ic-platform-runtime = { version = "0.23.27", default-features = false }
 ic-platform-types = { version = "0.21.5", default-features = false }
 ic-storage = "0.80.6"
-ic-wire = { version = "0.32.0", default-features = false }
+ic-wire = { version = "0.33.0", default-features = false }
 memchr = { version = "2.8.3", default-features = false }
 proc-macro2 = "1.0.107"
 quote = "1.0.47"

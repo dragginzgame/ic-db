@@ -3,6 +3,7 @@
 #[path = "artifact/growth.rs"]
 mod growth;
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_testkit::pocket_ic::ErrorCode;
 use ic_wire::{Direction, Encoding};
@@ -47,7 +48,7 @@ async fn typed_entity_growth() {
                     canister,
                     canister,
                     "exercise",
-                    ic_wire::encode(
+                    fixture_wire::encode(
                         &(entity, mode, row),
                         Encoding::Frame {
                             method: 1,
@@ -62,7 +63,7 @@ async fn typed_entity_growth() {
             let cycles = before
                 .checked_sub(pic.cycle_balance(canister).await)
                 .unwrap();
-            let (observed, opening, work): (Observation, [u64; 4], u64) = ic_wire::decode(
+            let (observed, opening, work): (Observation, [u64; 4], u64) = fixture_wire::decode(
                 &reply,
                 Encoding::Frame {
                     method: 1,
@@ -127,7 +128,7 @@ async fn typed_entity_growth() {
                 canister,
                 canister,
                 "exercise",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &(0_u8, 4_u8, (1_u64, 9_u64, 999_u64)),
                     Encoding::Frame {
                         method: 1,

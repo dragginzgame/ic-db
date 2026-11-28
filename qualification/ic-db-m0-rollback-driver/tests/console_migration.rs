@@ -1,5 +1,6 @@
 //! Local demo uses actual maintenance gates and survives a real executable upgrade.
 
+use ic_db_cli::fixture_wire;
 use ic_db_m0_rollback_driver::{LIMITS, instance};
 use ic_wire::{Direction, Encoding};
 
@@ -22,7 +23,7 @@ async fn demo_refuses_wrong_phases_and_reopens_exact_progress() {
                 canister,
                 canister,
                 "migration_demo",
-                ic_wire::encode(
+                fixture_wire::encode(
                     &action,
                     Encoding::Frame {
                         method: 142,
@@ -35,7 +36,7 @@ async fn demo_refuses_wrong_phases_and_reopens_exact_progress() {
             .await
             .unwrap();
 
-        ic_wire::decode::<Result<Reply, String>>(
+        fixture_wire::decode::<Result<Reply, String>>(
             &reply,
             Encoding::Frame {
                 method: 142,
@@ -57,7 +58,7 @@ async fn demo_refuses_wrong_phases_and_reopens_exact_progress() {
             canister,
             canister,
             "migration_demo",
-            ic_wire::encode(
+            fixture_wire::encode(
                 &7_u8,
                 Encoding::Frame {
                     method: 123,

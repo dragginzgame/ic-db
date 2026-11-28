@@ -1,7 +1,8 @@
 //! Fixed three-field row codec candidate, not generated schemas or a product format.
 //! IC DB owns schema admission and field semantics; Wire owns bounded traversal.
 
-use ic_wire::{Encoding, Limits};
+// The original M0 positional codec candidate has frozen byte vectors.
+use ic_wire_positional::{self as wire, Encoding, Limits};
 
 // Canonical field-name order: amount, id, note. No field names in each row.
 type Row = (u64, u64, Option<String>);
@@ -33,7 +34,7 @@ fn validate(row: &Row) -> Result<(), Refusal> {
 
 fn encode(row: &Row) -> Result<Vec<u8>, Refusal> {
     validate(row)?;
-    let payload = ic_wire::encode(row, Encoding::Payload, LIMITS).map_err(|_| Refusal::Codec)?;
+    let payload = wire::encode(row, Encoding::Payload, LIMITS).map_err(|_| Refusal::Codec)?;
     let mut frame = MAGIC.to_vec();
     frame.extend((payload.len() as u32).to_le_bytes());
     frame.extend(payload);
@@ -55,7 +56,7 @@ fn decode(stored_contract: &[u8; 32], bytes: &[u8], limits: Limits) -> Result<Ro
         return Err(Refusal::Frame);
     }
     let row =
-        ic_wire::decode(&bytes[HEADER..], Encoding::Payload, limits).map_err(|_| Refusal::Codec)?;
+        wire::decode(&bytes[HEADER..], Encoding::Payload, limits).map_err(|_| Refusal::Codec)?;
     validate(&row)?;
 
     Ok(row)

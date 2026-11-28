@@ -376,19 +376,7 @@ fn job_page(
         crate::system::trap("after successful group page");
     }
     let step = result.map_err(|e| e.to_string())?;
-    let (phase, rows, next) = match step.outcome {
-        JobOutcome::Running => (0, vec![], None),
-        JobOutcome::Complete(page) => (
-            1,
-            page.rows
-                .into_iter()
-                .map(|row| (row.key.category, row.count))
-                .collect(),
-            page.next.map(|c| c.to_bytes()),
-        ),
-        JobOutcome::Invalidated => (2, vec![], None),
-        JobOutcome::Expired => (3, vec![], None),
-    };
+    let (phase, rows, next) = page_result(step.outcome, |row| (row.key.category, row.count));
 
     Ok((step.sequence, phase, rows, next, step.source_revision))
 }
@@ -439,19 +427,9 @@ fn job_group_extremum(
         crate::system::trap("after grouped extremum advance");
     }
     let step = result.map_err(|e| e.to_string())?;
-    let (phase, rows, next) = match step.outcome {
-        JobOutcome::Running => (0, vec![], None),
-        JobOutcome::Complete(page) => (
-            1,
-            page.rows
-                .into_iter()
-                .map(|row| (row.key.category, row.value.map(|v| v.amount)))
-                .collect(),
-            page.next.map(|cursor| cursor.to_bytes()),
-        ),
-        JobOutcome::Invalidated => (2, vec![], None),
-        JobOutcome::Expired => (3, vec![], None),
-    };
+    let (phase, rows, next) = page_result(step.outcome, |row| {
+        (row.key.category, row.value.map(|v| v.amount))
+    });
 
     Ok((
         step.sequence,
@@ -573,13 +551,33 @@ fn category_counts(step: JobStep<ic_db::GroupPage<ic_db::GroupCount<Category>>>)
     })
 }
 
-fn progress<T>(step: JobStep<T>, display: impl FnOnce(T) -> Option<String>) -> Progress {
-    let (phase, value) = match step.outcome {
+fn phase_value<T>(outcome: JobOutcome<T>) -> (u8, Option<T>) {
+    match outcome {
         JobOutcome::Running => (0, None),
-        JobOutcome::Complete(value) => (1, display(value)),
+        JobOutcome::Complete(value) => (1, Some(value)),
         JobOutcome::Invalidated => (2, None),
         JobOutcome::Expired => (3, None),
-    };
+    }
+}
+
+fn page_result<T, R>(
+    outcome: JobOutcome<ic_db::GroupPage<T>>,
+    render: impl FnMut(T) -> R,
+) -> (u8, Vec<R>, Option<Vec<u8>>) {
+    let (phase, page) = phase_value(outcome);
+    let (rows, next) = page
+        .map(|page| {
+            (
+                page.rows.into_iter().map(render).collect(),
+                page.next.map(|cursor| cursor.to_bytes()),
+            )
+        })
+        .unwrap_or_default();
+    (phase, rows, next)
+}
+
+fn progress<T>(step: JobStep<T>, display: impl FnOnce(T) -> Option<String>) -> Progress {
+    let (phase, value) = phase_value(step.outcome);
 
     (
         step.sequence,
@@ -587,7 +585,7 @@ fn progress<T>(step: JobStep<T>, display: impl FnOnce(T) -> Option<String>) -> P
         step.examined,
         step.input_bytes,
         phase,
-        value,
+        value.and_then(display),
     )
 }
 

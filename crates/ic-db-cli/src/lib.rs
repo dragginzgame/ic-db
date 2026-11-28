@@ -1,6 +1,9 @@
 //! Transport types shared by the local DB console and its fixture canister.
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "fixture-wire")]
+pub mod fixture_wire;
+
 #[cfg(feature = "host")]
 pub mod host;
 
