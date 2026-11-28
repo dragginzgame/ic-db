@@ -1024,6 +1024,7 @@ dependencies = [
  "ic-db-qualification-transport",
  "ic-platform-runtime 0.23.27",
  "ic-storage 0.80.6",
+ "ic-wire 0.33.0",
  "toko-tooling",
 ]
 

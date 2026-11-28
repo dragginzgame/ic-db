@@ -118,7 +118,7 @@ fn capacity_inspect((id, offset): (u64, u64)) -> Result<Inspection, u8> {
             field(&control, POSITION)?,
             state,
         ],
-        bytes,
+        bytes.into(),
         map(&host, 3)
             .iter()
             .map(|entry| (*entry.key(), entry.value()))
@@ -131,7 +131,7 @@ type Candidate = StableBTreeMap<u64, Vec<u8>, DefaultMemoryImpl>;
 const STATE: u64 = 6;
 const POSITION: u64 = 7;
 const WIDTH: u64 = 8;
-type Inspection = ([u64; 5], Vec<u8>, Vec<(u64, u64)>);
+type Inspection = ([u64; 5], ic_wire::ByteBuf, Vec<(u64, u64)>);
 
 fn eligible(control: &Map) -> Result<(), u8> {
     if SCHEMA != 2 || field(control, FORMAT)? != 2 || field(control, PHASE)? != 0 {

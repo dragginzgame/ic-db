@@ -7,7 +7,7 @@ use ic_wire::{Direction, Encoding};
 use std::path::PathBuf;
 
 type Page = (Vec<(u64, u64)>, Option<u64>, u64);
-type CapacityInspection = ([u64; 5], Vec<u8>, Vec<(u64, u64)>);
+type CapacityInspection = ([u64; 5], ic_wire::ByteBuf, Vec<(u64, u64)>);
 
 fn artifacts() -> PathBuf {
     PathBuf::from(std::env::var_os("IC_DB_M0_MAINTENANCE_DIR").expect("run make m0-maintenance"))
@@ -418,8 +418,8 @@ async fn identified_maintenance() {
                 for offset in (0..width).step_by(8192) {
                     let bytes = inspect(id, offset).await.1;
                     assert_eq!(
-                        bytes,
-                        expected[offset as usize..expected.len().min(offset as usize + 8192)]
+                        bytes.as_slice(),
+                        &expected[offset as usize..expected.len().min(offset as usize + 8192)]
                     );
                 }
                 assert!(inspect(id, width).await.1.is_empty());
